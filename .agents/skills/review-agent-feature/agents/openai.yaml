@@ -1,0 +1,4 @@
+interface:
+  display_name: "Review Agent Feature"
+  short_description: "Build maintainable Review Agent features"
+  default_prompt: "Use $review-agent-feature to implement this Review Agent feature within the documented module boundaries."

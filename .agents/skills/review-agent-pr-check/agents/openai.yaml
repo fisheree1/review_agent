@@ -1,0 +1,4 @@
+interface:
+  display_name: "Review Agent PR Check"
+  short_description: "Run focused checks before a pull request"
+  default_prompt: "Use $review-agent-pr-check to run a focused pre-PR quality check for these changes."

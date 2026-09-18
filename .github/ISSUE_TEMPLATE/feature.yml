@@ -1,0 +1,28 @@
+name: Feature request
+description: Propose a user outcome rather than a preselected implementation
+title: "feat: "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: User problem
+      description: Who has this problem, in which learning workflow, and how often?
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Desired outcome
+      description: Describe observable success without prescribing architecture.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence or examples
+      description: Use sanitized examples only; do not attach private learning materials.
+  - type: textarea
+    id: exclusions
+    attributes:
+      label: Explicitly out of scope

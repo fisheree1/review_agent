@@ -1,0 +1,4 @@
+interface:
+  display_name: "Review Agent Data Change"
+  short_description: "Evolve Review Agent data safely"
+  default_prompt: "Use $review-agent-data-change to design and verify this Review Agent database change."

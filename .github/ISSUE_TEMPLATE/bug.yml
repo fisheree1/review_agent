@@ -1,0 +1,42 @@
+name: Bug report
+description: Report a reproducible product or operational defect
+title: "fix: "
+labels: [bug]
+body:
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Incorrect outcome
+      description: What happened, and what important user result was affected?
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected outcome
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Minimal reproduction
+      description: Include sanitized steps and sample data. Never attach private documents or credentials.
+    validations:
+      required: true
+  - type: dropdown
+    id: impact
+    attributes:
+      label: Impact
+      options:
+        - Data exposure, data loss, or security
+        - Primary flow blocked
+        - Incorrect answer, citation, or Quiz
+        - Degraded experience
+        - Minor issue
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Version, browser, operating system, document type, and relevant sanitized logs.

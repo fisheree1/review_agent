@@ -1,0 +1,4 @@
+interface:
+  display_name: "Review Agent RAG & Quiz"
+  short_description: "Improve cited RAG and reliable Quiz flows"
+  default_prompt: "Use $review-agent-rag-quiz to implement or review this RAG, Agent, or Quiz change."

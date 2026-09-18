@@ -1,0 +1,37 @@
+[project]
+name = "review-agent"
+version = "0.1.0"
+requires-python = ">=3.13"
+dependencies = [
+    "asyncpg>=0.30.0",
+    "fastapi[standard]>=0.141.1",
+    "pydantic-settings>=2.10.0",
+    "sqlalchemy[asyncio]>=2.0.43",
+]
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.0",
+    "mypy>=1.17.0",
+    "pytest>=8.4.0",
+    "ruff>=0.12.0",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py313"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "ASYNC"]
+ignore = ["B008"] # FastAPI dependency injection intentionally uses call defaults.
+
+[tool.mypy]
+python_version = "3.13"
+strict = true
+pretty = true
+show_error_codes = true
+files = ["app"]
