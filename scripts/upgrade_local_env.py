@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import os
 import secrets
+from collections.abc import Callable
 from pathlib import Path
+from uuid import uuid4
 
 ENV_PATH = Path(".env")
 LEGACY_TO_ADMIN_KEYS = {
@@ -11,9 +13,26 @@ LEGACY_TO_ADMIN_KEYS = {
 }
 NEW_LOCAL_VALUES = {
     "POSTGRES_MIGRATOR_USER": "review_agent_migrator",
-    "POSTGRES_MIGRATOR_PASSWORD": None,
     "POSTGRES_RUNTIME_USER": "review_agent_app",
-    "POSTGRES_RUNTIME_PASSWORD": None,
+    "MAX_UPLOAD_BYTES": "26214400",
+    "STORAGE_ENDPOINT": "localhost:9000",
+    "STORAGE_BUCKET": "review-agent-documents",
+    "STORAGE_SECURE": "false",
+    "JOB_POLL_SECONDS": "1",
+    "JOB_LEASE_SECONDS": "120",
+    "PDF_PARSER_TIMEOUT_SECONDS": "60",
+    "MAX_PDF_PAGES": "500",
+    "MAX_PDF_CHARACTERS": "5000000",
+}
+NEW_LOCAL_GENERATORS: dict[str, Callable[[], str]] = {
+    "POSTGRES_MIGRATOR_PASSWORD": lambda: secrets.token_hex(32),
+    "POSTGRES_RUNTIME_PASSWORD": lambda: secrets.token_hex(32),
+    "LOCAL_API_TOKEN": lambda: secrets.token_urlsafe(32),
+    "LOCAL_WORKSPACE_ID": lambda: str(uuid4()),
+    "STORAGE_ADMIN_ACCESS_KEY": lambda: secrets.token_hex(16),
+    "STORAGE_ADMIN_SECRET_KEY": lambda: secrets.token_hex(32),
+    "STORAGE_ACCESS_KEY": lambda: secrets.token_hex(16),
+    "STORAGE_SECRET_KEY": lambda: secrets.token_hex(32),
 }
 
 
@@ -57,8 +76,15 @@ def upgrade_local_env(content: str) -> str:
             if not entries[key][1]:
                 raise ValueError(f"{key} must not be blank")
             continue
-        value = default_value if default_value is not None else secrets.token_hex(32)
-        lines.append(f"{key}={value}")
+        lines.append(f"{key}={default_value}")
+        entries = _env_entries(lines)
+
+    for key, generate_value in NEW_LOCAL_GENERATORS.items():
+        if key in entries:
+            if not entries[key][1]:
+                raise ValueError(f"{key} must not be blank")
+            continue
+        lines.append(f"{key}={generate_value()}")
         entries = _env_entries(lines)
 
     return "\n".join(line for line in lines if line) + "\n"
@@ -82,7 +108,7 @@ def main() -> None:
         temporary_path.unlink(missing_ok=True)
         raise
 
-    print("Upgraded .env with separate PostgreSQL role credentials and mode 0600.")
+    print("Upgraded .env with document-ingestion credentials and mode 0600.")
 
 
 if __name__ == "__main__":

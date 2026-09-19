@@ -2,7 +2,7 @@
 
 版本：0.1
 数据库：PostgreSQL 17 + pgvector
-状态：Alembic 与最小权限角色基线已接入；业务字段仍应在选择认证方式、Embedding 模型和对象存储后固化。
+状态：Alembic 与最小权限角色已接入；`0002_document_ingestion` 固化第一份文本型 PDF 闭环，`0003_document_list_index` 支持资料库游标读取，RAG、认证成员关系与 Quiz 表仍待对应阶段迁移。
 
 ## 1. 设计目标
 
@@ -18,11 +18,11 @@
 | --- | --- | --- |
 | 用户、空间、文档元数据 | PostgreSQL | 权限与业务事实 |
 | 原始 PDF/DOCX/PPTX | 对象存储 | 私有 bucket，数据库保存对象键和哈希 |
-| 解析后的结构化正文 | 对象存储或 PostgreSQL JSONB | 大体量首选对象存储；可搜索片段进入 chunk |
+| 当前按页正文 | PostgreSQL `document_pages` | 保留页码与可读正文；后续 chunk 引用此版本 |
 | 文本分块与来源定位 | PostgreSQL | RAG 的可追溯最小单元 |
 | Embedding | pgvector | 派生数据，带模型与索引版本 |
 | 对话、Quiz、作答 | PostgreSQL | 业务记录与学习历史 |
-| 短期缓存、队列 | Redis | 可丢失/可重建，不作为事实源 |
+| 当前处理任务 | PostgreSQL `processing_jobs` | 可租约领取、审计和幂等重试；当前不依赖 Redis |
 | 密钥 | Secret Manager | 禁止保存明文 API key 到业务表 |
 
 ## 3. 命名与通用字段
@@ -80,7 +80,7 @@ erDiagram
 
 #### `workspaces`
 
-`id`、`public_id`、`name`、`owner_user_id`、`status`、`plan_code`、`created_at`、`updated_at`。
+当前迁移包含 `id`、`public_id`、`name`、`status`、`created_at`、`updated_at`。`owner_user_id`、成员和套餐字段等待认证方案确定后再扩展，避免先写入虚假身份模型。
 
 即使 MVP 是个人空间，也保留 workspace 边界，避免未来给所有表补租户列。
 
@@ -113,13 +113,17 @@ erDiagram
 | created_by | bigint | 上传用户 |
 | created_at / updated_at / deleted_at | timestamptz | 生命周期 |
 
-推荐唯一约束 `(workspace_id, sha256)` 只用于提示/去重策略，不应让不同展示用途的相同文件无法存在；可使用单独的 content object 表实现物理去重。
+当前 MVP 对未删除资料使用 `(workspace_id, sha256)` 部分唯一索引，重复上传返回已有资料，避免重复解析。若产品允许同一内容以多个展示实体存在，再通过独立 content object 表分离物理去重与业务文档。
 
 #### `document_versions`
 
-保存 `document_id`、`version_no`、解析器名称/版本、分块策略/版本、Embedding profile、结构化产物对象键、状态、chunk 数量和时间。唯一键 `(document_id, version_no)`。
+当前保存 `document_id`、`version_no`、来源哈希、解析器名称/版本、状态、页数和时间。唯一键 `(document_id, version_no)` 以及 `(document_id, source_sha256, parser_name, parser_version)` 防止任务重放重复创建版本。
 
 新索引完成前不改 `documents.active_version_id`。切换和版本状态更新在同一事务完成。
+
+#### `document_pages`
+
+保存 `document_version_id`、反规范化的 `workspace_id`、从 1 开始的 `page_number`、正文和字符数。`(document_version_id, page_number)` 唯一；读取必须同时经过 workspace、document 和 active version 过滤。
 
 #### `document_chunks`
 
@@ -149,7 +153,7 @@ Embedding 维度不能模糊配置后直接上线。首个模型确定后固定 
 
 #### `processing_jobs`
 
-包含 `public_id`、`workspace_id`、`document_id`、`job_type`、`idempotency_key`、`status`、`attempt_count`、`max_attempts`、`available_at`、`lease_expires_at`、`progress`、`failure_code` 和时间字段。
+包含 `public_id`、`workspace_id`、`document_id`、`job_type`、`idempotency_key`、`status`、`attempt_count`、`max_attempts`、`available_at`、`lease_expires_at`、`failure_code`、`failure_message`、`retry_of_job_id` 和时间字段。
 
 唯一键 `(workspace_id, job_type, idempotency_key)`。不要把完整异常、模型正文或文件内容塞入 `failure_detail`；详细诊断进入受控日志系统。
 
@@ -243,7 +247,7 @@ RLS 不能替代应用授权；后台任务、迁移和管理员连接要明确�
 3. Switch：部署读取新结构的代码。
 4. Contract：确认无旧版本运行后再删除旧列或约束。
 
-首个 `0001_database_baseline` revision 不创建业务表，用于让空库和当前无业务表的开发数据库进入统一迁移历史。现有数据库接入时先运行幂等角色配置，再执行 `alembic upgrade head`；该流程不会删除扩展、表或数据。回退基线只改变 Alembic 版本状态，不改变现有数据对象。
+首个 `0001_database_baseline` revision 不创建业务表，用于让空库和当前无业务表的开发数据库进入统一迁移历史。`0002_document_ingestion` 只增加第一份资料闭环所需的五张表、约束和索引，不预建全部业务表。现有数据库接入时先运行幂等角色配置，再执行 `alembic upgrade head`；升级不删除已有资料。生产回退优先用前滚修复；`0002` 的 downgrade 会删除资料表，只允许在无数据的临时环境演练。
 
 大表索引尽量并发创建；会锁表的迁移先在生产等量数据上演练。迁移脚本不调用外部服务、不依赖应用当前业务状态，也不在单事务中执行不可控的全表重写。
 

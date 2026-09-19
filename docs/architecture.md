@@ -40,7 +40,7 @@ flowchart LR
     WORKER --> OBS
 ```
 
-本地环境可用 Docker Compose 运行 API、Worker、PostgreSQL、Redis 和兼容 S3 的对象存储。生产环境使用托管 PostgreSQL 与对象存储，API 和 Worker 分别扩缩容。
+当前本地环境用 Docker Compose 运行 React Web、API、Worker、PostgreSQL 和兼容 S3 的 MinIO。Web 通过同源 Node 代理调用 API，本地访问令牌只存在于代理进程环境中，不进入浏览器包。生产环境需用正式认证网关替代该单用户开发代理，并使用托管 PostgreSQL 与对象存储，API 和 Worker分别扩缩容。
 
 ### 2.1 技术选型基线
 
@@ -53,17 +53,17 @@ flowchart LR
 | API | Python 3.13 + FastAPI + Pydantic | 延续当前环境；异步 HTTP、schema 与 OpenAPI 支持良好 |
 | 数据访问 | SQLAlchemy 2 async + Alembic | 显式会话/事务与可审查迁移；Repository 只在有业务边界处使用 |
 | 数据库 | PostgreSQL 17 + pgvector | 事务数据与首版向量共址，降低一致性和运维成本 |
-| 后台任务 | Celery + Redis broker | 适合独立 Worker 与水平扩展；业务任务状态仍写 PostgreSQL |
+| 后台任务 | PostgreSQL 持久化任务表 + 独立 Worker | 当前负载下与业务写入原子提交，具备租约与幂等；达到迁移门槛后再接外部 broker |
 | 文件存储 | S3-compatible；本地 MinIO | 原始文件不占数据库；通过统一 adapter 切换云供应商 |
 | 实时反馈 | SSE 优先 | 生成输出主要是服务端单向流；比 WebSocket 更简单，断线可恢复 |
 | 观测 | OpenTelemetry + 结构化日志 | 统一 API、Worker、数据库和模型调用的 trace |
 | 测试 | pytest；前端 Vitest/Testing Library/Playwright | 单元、集成、契约与关键旅程分层 |
 
-Celery/Redis、MinIO 和前端包应在对应阶段用一个小型技术验证确认 Python 3.13 支持、优雅关停、重试语义和容器体积，再以 ADR 固化确切版本。任务消息只负责触发，不能把 Celery result backend 当作业务事实源。
+当前任务队列决策见 [ADR-0001](./adr/0001-postgresql-document-jobs.md)。当任务吞吐、隔离队列、调度或跨服务消费达到实测门槛时，可增加 Celery/Redis 或云队列；任务状态仍以 PostgreSQL 为事实源，不能把 broker/result backend 当作业务记录。MinIO 使用固定版本，本地 bucket 默认私有，应用凭据只允许访问文档 bucket。
 
 ### 2.2 前端状态边界
 
-- 服务端状态（资料列表、处理进度、消息、Quiz）由 Query cache 管理。
+- 服务端状态（资料列表、处理进度、消息、Quiz）由 Query cache 管理；资料处理中使用有界轮询，完成后自动停止。
 - URL 状态（当前资料、集合、筛选、页码）进入路由，保证刷新与分享后可恢复。
 - 临时 UI 状态（侧栏宽度、主题、对话框）使用组件状态或小型 store。
 - 未提交的长表单草稿可保存本地，但提交成功后以服务端结果为准。
@@ -109,12 +109,12 @@ Domain 不导入 FastAPI、SQLAlchemy、模型 SDK、Redis 或对象存储 SDK�
 
 ### 4.1 文档摄取
 
-1. API 校验扩展名、MIME、大小、用户配额，创建 `document` 和一次性上传目标。
-2. 客户端直接或流式上传到对象存储；服务端计算/确认 SHA-256。
-3. API 以幂等键提交索引任务并立即返回 `202 Accepted`。
-4. Worker 锁定任务，下载文件，隔离解析；保存结构化解析产物。
-5. Worker 以稳定算法分块，批量生成 Embedding，并在事务中写入当前索引版本。
-6. 全部完成后原子切换 `active_index_version`，避免用户检索到半成品。
+1. API 流式校验扩展名、MIME、PDF 魔数和大小，同时计算 SHA-256。
+2. API 用 workspace/document UUID 生成对象键，将原文件写入私有对象存储；原始文件名不参与路径。
+3. 文档与 `pdf_parse` 任务通过数据库幂等键持久化，API 立即返回 `202 Accepted`。
+4. Worker 通过 `FOR UPDATE SKIP LOCKED` 和租约领取任务，下载文件，在有超时和页数上限的子进程中解析。
+5. 当前第一阶段按页写入正文和页码，在同一事务中创建版本并切换 `active_version_id`；同一来源和解析器版本不会重复写页。
+6. 后续分块与 Embedding 完成后，继续沿版本化产物和原子激活扩展，禁止暴露半成品。
 
 重要约束：任务采用至少一次投递，因此每一步必须幂等；禁止假定任务只执行一次。
 
@@ -181,9 +181,9 @@ MVP 使用受控工作流 Agent，而不是无限循环的通用 Agent。
 ## 8. 可靠性与一致性
 
 - 数据库内写入使用短事务；外部模型调用不持有数据库事务或行锁。
-- 数据库写入与发任务使用 Outbox 模式，避免“数据已提交但任务未发送”。
-- Worker 使用任务租约、心跳和幂等键；可安全重试，达到上限后进入死信状态。
-- 文档删除采用状态机与后台清理；业务查询立即排除 `deleting/deleted` 数据。
+- 当前任务记录与文档状态在同一 PostgreSQL 事务提交，不存在数据库提交后 broker 消息丢失的窗口；引入外部 broker 时必须增加 Outbox。
+- Worker 使用任务租约、尝试上限和幂等键；进程中断后租约到期可重新领取，解析失败保存稳定错误码并支持显式重试。
+- 文档删除先进入 `deleting` 并取消待处理任务，再删除私有对象和派生版本；业务查询始终排除 `deleted` 数据。
 - 对象存储与数据库不支持分布式事务，通过补偿任务和定期一致性扫描修复。
 
 ## 9. 安全架构

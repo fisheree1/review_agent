@@ -1,11 +1,11 @@
 import pytest
 from pydantic import SecretStr, ValidationError
 
-from app.core.config import MigrationSettings, ProvisioningSettings, Settings
+from app.core.config import DatabaseSettings, MigrationSettings, ProvisioningSettings
 
 
 def test_database_url_safely_encodes_credentials() -> None:
-    settings = Settings(
+    settings = DatabaseSettings(
         postgres_runtime_user="reader@example.com",
         postgres_runtime_password=SecretStr("unsafe:/password"),
         postgres_host="localhost",

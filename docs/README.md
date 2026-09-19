@@ -10,6 +10,7 @@
 4. [数据库设计](./database-design.md)：数据模型、安全、索引、迁移与备份策略。
 5. [UI 与阅读体验规范](./ui-design-system.md)：信息架构、视觉 Token、交互、动效和无障碍。
 6. [Git 与 GitHub 管理规范](./git-github-workflow.md)：分支、提交、PR、CI、仓库设置和发布。
+7. [ADR-0001：PostgreSQL 文档任务](./adr/0001-postgresql-document-jobs.md)：当前后台任务选择与迁移门槛。
 
 ## 文档状态
 
@@ -18,7 +19,7 @@
 | 产品需求 | 基线 v0.1 | MVP 规划与验收 |
 | 系统架构 | 基线 v0.1 | MVP 开发与扩展 |
 | 开发规范 | 基线 v0.1 | 所有代码提交 |
-| 数据库设计 | 设计草案 v0.1 | 首次业务迁移前评审 |
+| 数据库设计 | 已实现 v0.2 | PDF 资料闭环与后续 schema 演进 |
 | UI 规范 | 设计草案 v0.1 | 原型与前端开发 |
 | Git 与 GitHub | 基线 v0.1 | 所有代码变更与发布 |
 

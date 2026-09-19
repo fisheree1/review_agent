@@ -2,12 +2,15 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
 
-from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi import Depends, FastAPI, HTTPException, Request, status
+from fastapi.responses import JSONResponse
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.core.database import close_database, get_db_session, verify_runtime_database_role
+from app.core.errors import ApplicationError
+from app.documents.api import router as documents_router
 
 settings = get_settings()
 
@@ -24,6 +27,23 @@ app = FastAPI(
     version=settings.app_version,
     lifespan=lifespan,
 )
+app.include_router(documents_router)
+
+
+@app.exception_handler(ApplicationError)
+async def application_error_handler(_: Request, exc: ApplicationError) -> JSONResponse:
+    headers = {"WWW-Authenticate": "Bearer"} if exc.status_code == 401 else None
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "error": {
+                "code": exc.code,
+                "message": exc.message,
+                "details": exc.details,
+            }
+        },
+        headers=headers,
+    )
 
 
 @app.get("/", tags=["system"])

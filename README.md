@@ -1,6 +1,6 @@
 # Review Agent
 
-面向学习资料的 AI 学习平台后端。项目计划支持上传 PDF、Word、PPT，构建可追溯的 RAG 知识库，并按用户要求生成 Quiz。
+面向学习资料的 AI 学习平台。当前已具备 React 资料库与阅读器、FastAPI 文档接口、私有文件存储和后台 PDF 解析；后续将扩展可追溯 RAG 与按要求生成 Quiz。
 
 ## 项目文档
 
@@ -52,13 +52,17 @@ app/
 
 - FastAPI 服务及 Swagger 文档。
 - PostgreSQL 17 + pgvector。
+- Alembic 迁移、数据库管理员/迁移/运行账号分离。
+- 私有 MinIO 原文件存储，管理凭据与应用 bucket 凭据分离。
+- 独立 Worker、持久化任务租约与幂等重试。
+- 文本型 PDF 流式上传校验、逐页正文解析、状态查询、失败说明和删除。
+- React 资料库、上传进度、处理状态、按页正文阅读和来源定位面板。
 - API 与数据库存活/就绪健康检查。
-- Docker Compose 本地开发环境。
 - 基础自动化测试。
 
 ## 启动
 
-首次启动先生成只保存在本机的 `.env`。脚本会为数据库管理员、迁移账号和应用运行账号分别创建 64 位随机密码，并把文件权限设置为 `0600`：
+首次启动先生成只保存在本机的 `.env`。脚本会生成数据库角色、API 令牌、工作区 ID、对象存储管理账号和受限应用账号所需的随机值，并把文件权限设置为 `0600`：
 
 ```bash
 python3 scripts/init_local_env.py
@@ -79,12 +83,48 @@ curl http://localhost:8000/health/live
 curl http://localhost:8000/health/ready
 ```
 
+阅读页面：<http://127.0.0.1:5173>
+
 接口文档：<http://localhost:8000/docs>
 
-Compose 启动时会先运行一次幂等的 `database-init` 任务：管理员账号创建或更新最小权限角色与 schema，随后迁移账号执行 `alembic upgrade head`。API 容器只接收运行账号凭据。需要单独重跑初始化与迁移时使用：
+Web 容器通过同源代理访问 API，并在服务端附加本地开发令牌；令牌不会写入浏览器包。当前代理只用于回环地址上的单用户开发环境，生产部署需接入正式认证网关。
+
+Compose 启动时先运行两个幂等初始化任务：`database-init` 配置最小权限数据库角色并执行 Alembic；`storage-init` 创建私有 bucket 和仅可访问该 bucket 的应用账号。API 与 Worker 不接收数据库或对象存储管理凭据。需要单独重跑初始化与迁移时使用：
 
 ```bash
 docker compose run --rm database-init
+docker compose run --rm storage-init
+docker compose exec -T api python -m scripts.verify_runtime_database_access
+docker compose exec -T api python -m scripts.verify_storage_access
+```
+
+### 上传并查看 PDF 正文
+
+本地令牌来自 `.env`，不要把它复制进代码、文档或 Git：
+
+```bash
+set -a
+source .env
+set +a
+
+curl -X POST http://127.0.0.1:8000/api/v1/documents \
+  -H "Authorization: Bearer ${LOCAL_API_TOKEN}" \
+  -H "Idempotency-Key: my-first-pdf" \
+  -F "file=@/absolute/path/to/material.pdf;type=application/pdf"
+
+curl http://127.0.0.1:8000/api/v1/documents/<document-id> \
+  -H "Authorization: Bearer ${LOCAL_API_TOKEN}"
+
+curl http://127.0.0.1:8000/api/v1/documents/<document-id>/pages \
+  -H "Authorization: Bearer ${LOCAL_API_TOKEN}"
+```
+
+失败资料可用 `POST /api/v1/documents/{id}:retry` 并携带稳定的 `Idempotency-Key` 重试；删除使用 `DELETE /api/v1/documents/{id}`。当前只支持具有可提取文字的 PDF，扫描版会返回 `PDF_TEXT_NOT_FOUND` 并提示后续需要 OCR。
+
+可用一份本地 PDF 运行完整验收；脚本不会把资料加入 Git，成功解析的样例会保留在本机资料库：
+
+```bash
+uv run python -m scripts.verify_document_flow /absolute/path/to/material.pdf
 ```
 
 停止服务：
@@ -93,9 +133,9 @@ docker compose run --rm database-init
 docker compose down
 ```
 
-数据库数据保存在 Docker volume 中；只有执行 `docker compose down -v` 才会删除本地数据库数据。
+数据库和原文件分别保存在 Docker volumes 中；只有执行 `docker compose down -v` 才会删除这两类本地数据。
 
-默认本地配置只把 API 和 PostgreSQL 发布到 `127.0.0.1`。`compose.override.yaml` 仅用于本地数据库工具连接；生产或类生产环境应显式使用 `docker compose -f compose.yaml ...`，基础配置不会发布 PostgreSQL 端口。生产密钥应由秘密管理服务注入，而不是使用 `.env`。管理员凭据只提供给数据库和一次性初始化容器，迁移凭据只提供给初始化容器，API 只获得无 DDL 权限的运行凭据。
+默认本地配置只把 API、PostgreSQL 和 MinIO API 发布到 `127.0.0.1`。`compose.override.yaml` 仅供本地数据库/存储检查；生产或类生产环境应显式使用 `docker compose -f compose.yaml ...`，基础配置不发布数据库与对象存储端口。生产密钥应由秘密管理服务注入，而不是使用 `.env`。管理凭据只提供给基础设施和一次性初始化容器；API/Worker 只获得数据库 DML 权限和指定 bucket 的对象读写删除权限。
 
 ## 本地开发与测试
 
@@ -103,4 +143,9 @@ docker compose down
 uv sync
 uv run fastapi dev app/main.py
 uv run pytest
+
+pnpm --dir web install --frozen-lockfile
+LOCAL_API_TOKEN=<本地令牌> pnpm --dir web dev
+pnpm --dir web typecheck
+pnpm --dir web test
 ```

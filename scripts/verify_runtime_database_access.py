@@ -4,7 +4,7 @@ import asyncio
 
 import asyncpg  # type: ignore[import-untyped]
 
-from app.core.config import Settings
+from app.core.config import DatabaseSettings
 from app.core.database_schema import APPLICATION_SCHEMA
 
 
@@ -23,7 +23,7 @@ async def _assert_ddl_denied(
 
 
 async def verify_runtime_database_access() -> None:
-    settings = Settings()  # type: ignore[call-arg]
+    settings = DatabaseSettings()  # type: ignore[call-arg]
     connection = await asyncpg.connect(
         host=settings.postgres_host,
         port=settings.postgres_port,

@@ -173,4 +173,10 @@ docker compose ps
 
 `database-init` 是可重复执行的一次性容器，先以管理员账号幂等配置角色与 schema，再以迁移账号运行 Alembic。API 只接收运行账号凭据。手动执行迁移使用 `docker compose run --rm database-init`，不要从 API 启动流程调用 `create_all()`。当前 `0001_database_baseline` 只建立 Alembic 版本基线，不创建尚未定稿的业务表。
 
-当前健康检查：`/health/live` 验证进程存活，`/health/ready` 验证数据库和 pgvector 可用。后续增加任务队列后，就绪检查只验证当前进程的硬依赖，外部模型故障通过降级和指标展示，不应让整个 API 不健康。
+`0002_document_ingestion` 创建当前资料闭环所需的 `workspaces`、`documents`、`document_versions`、`document_pages` 和 `processing_jobs`，不提前创建 RAG、对话或 Quiz 表。`0003_document_list_index` 只增加资料库游标查询索引。每次改模型后运行 `docker compose run --rm database-init alembic check`，并从空库与上一 revision 验证升级。
+
+当前 Worker 直接领取 PostgreSQL 中的持久任务，使用短事务、租约、尝试上限和幂等键。PDF 解析在子进程执行，API 不解析正文。引入 Redis/Celery 前先依据 [ADR-0001](./adr/0001-postgresql-document-jobs.md) 的迁移门槛评审，不能形成第二份任务状态。
+
+当前健康检查：`/health/live` 验证进程存活，`/health/ready` 验证数据库和 pgvector 可用。就绪检查只验证当前进程的硬依赖，外部模型故障通过降级和指标展示，不应让整个 API 不健康。
+
+React 前端位于 `web/`。服务端状态由 TanStack Query 管理，当前资料与页码进入 URL，主题、字号和行宽只保存在本地。开发与预览代理从 Node 进程环境读取 `LOCAL_API_TOKEN` 并为 `/api` 请求附加认证头；禁止使用 `VITE_` 前缀暴露令牌。组件测试使用 Vitest/Testing Library，真实上传阅读旅程使用 Playwright，并通过 `E2E_PDF_PATH` 指向本地文本型 PDF。

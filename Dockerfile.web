@@ -1,0 +1,26 @@
+FROM node:24-alpine AS build
+
+RUN corepack enable
+WORKDIR /app/web
+
+COPY web/package.json web/pnpm-lock.yaml ./
+RUN pnpm install --frozen-lockfile
+
+COPY web/ ./
+RUN LOCAL_API_TOKEN=build-placeholder pnpm run build
+
+FROM node:24-alpine AS runtime
+
+ENV NODE_ENV=production
+RUN corepack enable
+WORKDIR /app/web
+
+COPY --from=build --chown=node:node /app/web/package.json /app/web/pnpm-lock.yaml ./
+COPY --from=build --chown=node:node /app/web/node_modules ./node_modules
+COPY --from=build --chown=node:node /app/web/dist ./dist
+COPY --from=build --chown=node:node /app/web/vite.config.ts ./vite.config.ts
+
+USER node
+EXPOSE 5173
+
+CMD ["node", "./node_modules/vite/bin/vite.js", "preview", "--host", "0.0.0.0", "--strictPort"]

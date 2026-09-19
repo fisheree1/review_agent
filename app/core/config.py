@@ -1,7 +1,8 @@
 from functools import lru_cache
 from typing import Self
+from uuid import UUID
 
-from pydantic import SecretStr, model_validator
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine import URL
 
@@ -24,21 +25,20 @@ def build_database_url(
     ).render_as_string(hide_password=False)
 
 
-class Settings(BaseSettings):
-    app_name: str = "Review Agent API"
-    app_version: str = "0.1.0"
-    app_env: str = "development"
-    postgres_host: str = "localhost"
-    postgres_port: int = 5432
-    postgres_db: str = "review_agent"
-    postgres_runtime_user: str = "review_agent_app"
-    postgres_runtime_password: SecretStr
-
+class EnvironmentSettings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",
     )
+
+
+class DatabaseSettings(EnvironmentSettings):
+    postgres_host: str = "localhost"
+    postgres_port: int = 5432
+    postgres_db: str = "review_agent"
+    postgres_runtime_user: str = "review_agent_app"
+    postgres_runtime_password: SecretStr
 
     @property
     def sqlalchemy_database_url(self) -> str:
@@ -51,18 +51,52 @@ class Settings(BaseSettings):
         )
 
 
-class MigrationSettings(BaseSettings):
+class StorageSettings(EnvironmentSettings):
+    storage_endpoint: str = "localhost:9000"
+    storage_access_key: str
+    storage_secret_key: SecretStr
+    storage_bucket: str = "review-agent-documents"
+    storage_secure: bool = False
+
+
+class StorageAdminSettings(StorageSettings):
+    storage_admin_access_key: str
+    storage_admin_secret_key: SecretStr
+
+
+class Settings(DatabaseSettings):
+    app_name: str = "Review Agent API"
+    app_version: str = "0.1.0"
+    app_env: str = "development"
+    local_api_token: SecretStr
+    local_workspace_id: UUID
+    max_upload_bytes: int = Field(default=25 * 1024 * 1024, gt=0)
+    storage_endpoint: str = "localhost:9000"
+    storage_access_key: str
+    storage_secret_key: SecretStr
+    storage_bucket: str = "review-agent-documents"
+    storage_secure: bool = False
+
+
+class WorkerSettings(DatabaseSettings):
+    storage_endpoint: str = "localhost:9000"
+    storage_access_key: str
+    storage_secret_key: SecretStr
+    storage_bucket: str = "review-agent-documents"
+    storage_secure: bool = False
+    job_poll_seconds: float = Field(default=1.0, gt=0)
+    job_lease_seconds: int = Field(default=120, gt=0)
+    pdf_parser_timeout_seconds: int = Field(default=60, gt=0)
+    max_pdf_pages: int = Field(default=500, gt=0)
+    max_pdf_characters: int = Field(default=5_000_000, gt=0)
+
+
+class MigrationSettings(EnvironmentSettings):
     postgres_host: str = "localhost"
     postgres_port: int = 5432
     postgres_db: str = "review_agent"
     postgres_migrator_user: str = "review_agent_migrator"
     postgres_migrator_password: SecretStr
-
-    model_config = SettingsConfigDict(
-        env_file=".env",
-        env_file_encoding="utf-8",
-        extra="ignore",
-    )
 
     @property
     def sqlalchemy_database_url(self) -> str:
@@ -75,7 +109,7 @@ class MigrationSettings(BaseSettings):
         )
 
 
-class ProvisioningSettings(BaseSettings):
+class ProvisioningSettings(EnvironmentSettings):
     postgres_host: str = "localhost"
     postgres_port: int = 5432
     postgres_db: str = "review_agent"
@@ -85,12 +119,6 @@ class ProvisioningSettings(BaseSettings):
     postgres_migrator_password: SecretStr
     postgres_runtime_user: str = "review_agent_app"
     postgres_runtime_password: SecretStr
-
-    model_config = SettingsConfigDict(
-        env_file=".env",
-        env_file_encoding="utf-8",
-        extra="ignore",
-    )
 
     @model_validator(mode="after")
     def database_roles_are_distinct(self) -> Self:
@@ -108,3 +136,9 @@ class ProvisioningSettings(BaseSettings):
 def get_settings() -> Settings:
     # BaseSettings supplies required secrets from environment sources at runtime.
     return Settings()  # type: ignore[call-arg]
+
+
+@lru_cache
+def get_database_settings() -> DatabaseSettings:
+    # BaseSettings supplies required secrets from environment sources at runtime.
+    return DatabaseSettings()  # type: ignore[call-arg]
