@@ -1,0 +1,6 @@
+services:
+  db:
+    # Local database tools can connect through loopback. Production must use
+    # only compose.yaml, which does not publish the PostgreSQL port.
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"

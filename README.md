@@ -58,7 +58,13 @@ app/
 
 ## 启动
 
-可选：复制 `.env.example` 为 `.env` 并修改本地开发配置。默认值可直接运行。
+首次启动先生成只保存在本机的 `.env`。脚本会创建 64 位随机 PostgreSQL 密码，并把文件权限设置为 `0600`：
+
+```bash
+python3 scripts/init_local_env.py
+```
+
+如果 `.env` 已存在，脚本会拒绝覆盖，避免意外轮换正在使用的数据库密码。
 
 ```bash
 docker compose up --build -d
@@ -76,6 +82,8 @@ docker compose down
 ```
 
 数据库数据保存在 Docker volume 中；只有执行 `docker compose down -v` 才会删除本地数据库数据。
+
+默认本地配置只把 API 和 PostgreSQL 发布到 `127.0.0.1`。`compose.override.yaml` 仅用于本地数据库工具连接；生产或类生产环境应显式使用 `docker compose -f compose.yaml ...`，基础配置不会发布 PostgreSQL 端口。生产密钥应由秘密管理服务注入，而不是使用 `.env`。
 
 ## 本地开发与测试
 

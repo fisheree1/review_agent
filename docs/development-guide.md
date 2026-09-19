@@ -160,10 +160,13 @@ CI 最少执行：锁文件一致性、格式/静态检查、类型检查、单�
 ## 13. 本地开发
 
 ```bash
+python3 scripts/init_local_env.py
 uv sync
 uv run pytest
 docker compose up --build -d
 docker compose ps
 ```
+
+本地 API 与数据库端口只绑定回环地址。`compose.override.yaml` 发布数据库端口供本地工具使用；生产运行只使用基础 `compose.yaml`，不发布数据库端口。API 镜像使用固定的非 root UID/GID，并在 Compose 中启用只读根文件系统、移除 Linux capabilities 和 `no-new-privileges`。
 
 当前健康检查：`/health/live` 验证进程存活，`/health/ready` 验证数据库和 pgvector 可用。后续增加任务队列后，就绪检查只验证当前进程的硬依赖，外部模型故障通过降级和指标展示，不应让整个 API 不健康。

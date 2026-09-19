@@ -7,7 +7,9 @@ on:
       - "docker/**"
       - "Dockerfile"
       - "compose.yaml"
+      - "compose.override.yaml"
       - "pyproject.toml"
+      - "scripts/init_local_env.py"
       - "uv.lock"
       - ".github/workflows/container-smoke.yml"
   push:
@@ -17,7 +19,9 @@ on:
       - "docker/**"
       - "Dockerfile"
       - "compose.yaml"
+      - "compose.override.yaml"
       - "pyproject.toml"
+      - "scripts/init_local_env.py"
       - "uv.lock"
       - ".github/workflows/container-smoke.yml"
   workflow_dispatch:
@@ -37,8 +41,18 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      - name: Create ephemeral local configuration
+        run: python3 scripts/init_local_env.py
+
       - name: Validate Compose configuration
         run: docker compose config --quiet
+
+      - name: Verify network exposure policy
+        run: |
+          docker compose config --format json \
+            | jq -e '.services.api.ports[0].host_ip == "127.0.0.1" and .services.db.ports[0].host_ip == "127.0.0.1"'
+          docker compose -f compose.yaml config --format json \
+            | jq -e '(.services.db.ports // []) | length == 0'
 
       - name: Start application stack
         run: docker compose up --build --wait --wait-timeout 120 -d

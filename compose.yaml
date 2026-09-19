@@ -4,9 +4,13 @@ services:
       context: .
     environment:
       APP_ENV: ${APP_ENV:-development}
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-review_agent}:${POSTGRES_PASSWORD:-review_agent}@db:5432/${POSTGRES_DB:-review_agent}
+      POSTGRES_HOST: db
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-review_agent}
+      POSTGRES_USER: ${POSTGRES_USER:-review_agent}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Run python3 scripts/init_local_env.py first}
     ports:
-      - "${API_PORT:-8000}:8000"
+      - "127.0.0.1:${API_PORT:-8000}:8000"
     depends_on:
       db:
         condition: service_healthy
@@ -20,6 +24,15 @@ services:
       timeout: 3s
       retries: 10
       start_period: 5s
+    init: true
+    user: "10001:10001"
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     restart: unless-stopped
 
   db:
@@ -27,9 +40,9 @@ services:
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-review_agent}
       POSTGRES_USER: ${POSTGRES_USER:-review_agent}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-review_agent}
-    ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Run python3 scripts/init_local_env.py first}
+    expose:
+      - "5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./docker/postgres/init:/docker-entrypoint-initdb.d:ro
