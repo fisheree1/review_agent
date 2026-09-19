@@ -16,7 +16,10 @@ RUN groupadd --gid 10001 app \
     && useradd --uid 10001 --gid app --create-home --home-dir /home/app \
         --shell /usr/sbin/nologin app
 
+COPY --chown=app:app alembic.ini ./
 COPY --chown=app:app app ./app
+COPY --chown=app:app migrations ./migrations
+COPY --chown=app:app scripts ./scripts
 
 EXPOSE 8000
 

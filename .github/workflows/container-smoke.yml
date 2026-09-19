@@ -5,11 +5,13 @@ on:
     paths:
       - "app/**"
       - "docker/**"
+      - "migrations/**"
       - "Dockerfile"
+      - "alembic.ini"
       - "compose.yaml"
       - "compose.override.yaml"
       - "pyproject.toml"
-      - "scripts/init_local_env.py"
+      - "scripts/**"
       - "uv.lock"
       - ".github/workflows/container-smoke.yml"
   push:
@@ -17,11 +19,13 @@ on:
     paths:
       - "app/**"
       - "docker/**"
+      - "migrations/**"
       - "Dockerfile"
+      - "alembic.ini"
       - "compose.yaml"
       - "compose.override.yaml"
       - "pyproject.toml"
-      - "scripts/init_local_env.py"
+      - "scripts/**"
       - "uv.lock"
       - ".github/workflows/container-smoke.yml"
   workflow_dispatch:
@@ -59,6 +63,11 @@ jobs:
 
       - name: Verify API and database readiness
         run: curl --fail --silent --show-error http://localhost:8000/health/ready
+
+      - name: Verify migration idempotency and runtime privileges
+        run: |
+          docker compose run --rm database-init
+          docker compose exec -T api python -m scripts.verify_runtime_database_access
 
       - name: Show logs after failure
         if: failure()

@@ -7,13 +7,14 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
-from app.core.database import close_database, get_db_session
+from app.core.database import close_database, get_db_session, verify_runtime_database_role
 
 settings = get_settings()
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    await verify_runtime_database_role()
     yield
     await close_database()
 

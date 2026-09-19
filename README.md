@@ -58,13 +58,19 @@ app/
 
 ## 启动
 
-首次启动先生成只保存在本机的 `.env`。脚本会创建 64 位随机 PostgreSQL 密码，并把文件权限设置为 `0600`：
+首次启动先生成只保存在本机的 `.env`。脚本会为数据库管理员、迁移账号和应用运行账号分别创建 64 位随机密码，并把文件权限设置为 `0600`：
 
 ```bash
 python3 scripts/init_local_env.py
 ```
 
 如果 `.env` 已存在，脚本会拒绝覆盖，避免意外轮换正在使用的数据库密码。
+
+从早期单账号配置升级时运行下面的命令。脚本保留原数据库所有者的用户名和密码，只增加迁移与运行账号凭据：
+
+```bash
+python3 scripts/upgrade_local_env.py
+```
 
 ```bash
 docker compose up --build -d
@@ -75,6 +81,12 @@ curl http://localhost:8000/health/ready
 
 接口文档：<http://localhost:8000/docs>
 
+Compose 启动时会先运行一次幂等的 `database-init` 任务：管理员账号创建或更新最小权限角色与 schema，随后迁移账号执行 `alembic upgrade head`。API 容器只接收运行账号凭据。需要单独重跑初始化与迁移时使用：
+
+```bash
+docker compose run --rm database-init
+```
+
 停止服务：
 
 ```bash
@@ -83,7 +95,7 @@ docker compose down
 
 数据库数据保存在 Docker volume 中；只有执行 `docker compose down -v` 才会删除本地数据库数据。
 
-默认本地配置只把 API 和 PostgreSQL 发布到 `127.0.0.1`。`compose.override.yaml` 仅用于本地数据库工具连接；生产或类生产环境应显式使用 `docker compose -f compose.yaml ...`，基础配置不会发布 PostgreSQL 端口。生产密钥应由秘密管理服务注入，而不是使用 `.env`。
+默认本地配置只把 API 和 PostgreSQL 发布到 `127.0.0.1`。`compose.override.yaml` 仅用于本地数据库工具连接；生产或类生产环境应显式使用 `docker compose -f compose.yaml ...`，基础配置不会发布 PostgreSQL 端口。生产密钥应由秘密管理服务注入，而不是使用 `.env`。管理员凭据只提供给数据库和一次性初始化容器，迁移凭据只提供给初始化容器，API 只获得无 DDL 权限的运行凭据。
 
 ## 本地开发与测试
 

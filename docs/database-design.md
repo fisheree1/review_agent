@@ -2,7 +2,7 @@
 
 版本：0.1
 数据库：PostgreSQL 17 + pgvector
-状态：业务迁移前的设计基线；字段应在选择认证方式、Embedding 模型和对象存储后固化。
+状态：Alembic 与最小权限角色基线已接入；业务字段仍应在选择认证方式、Embedding 模型和对象存储后固化。
 
 ## 1. 设计目标
 
@@ -219,6 +219,8 @@ attempt 保存用户、开始/提交时间、状态、总分与 Quiz 版本；an
 
 应用启动时拒绝使用超级用户。生产数据库不直接暴露公网，强制 TLS，限制安全组来源和连接数。
 
+当前 Compose 基线使用三类凭据：管理员只供 PostgreSQL 初始化和一次性角色配置，`review_agent_migrator` 拥有应用 schema 并执行 Alembic，`review_agent_app` 只拥有应用 schema 的 DML 与序列使用权限。Alembic 版本表位于独立的 `review_agent_migrations` schema，运行账号无权读取或修改。运行账号同时被撤销数据库临时对象权限，不能执行持久或临时 DDL。
+
 ### 7.2 租户隔离
 
 应用查询必须强制 workspace scope；生产多租户阶段建议启用 PostgreSQL Row Level Security 作为第二道防线。每个事务设置经过验证的 workspace 上下文，RLS policy 根据该上下文限制行。
@@ -240,6 +242,8 @@ RLS 不能替代应用授权；后台任务、迁移和管理员连接要明确�
 2. Migrate：后台回填，带断点、限速、指标和一致性校验。
 3. Switch：部署读取新结构的代码。
 4. Contract：确认无旧版本运行后再删除旧列或约束。
+
+首个 `0001_database_baseline` revision 不创建业务表，用于让空库和当前无业务表的开发数据库进入统一迁移历史。现有数据库接入时先运行幂等角色配置，再执行 `alembic upgrade head`；该流程不会删除扩展、表或数据。回退基线只改变 Alembic 版本状态，不改变现有数据对象。
 
 大表索引尽量并发创建；会锁表的迁移先在生产等量数据上演练。迁移脚本不调用外部服务、不依赖应用当前业务状态，也不在单事务中执行不可控的全表重写。
 

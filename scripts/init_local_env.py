@@ -6,18 +6,22 @@ from pathlib import Path
 
 TEMPLATE_PATH = Path(".env.example")
 OUTPUT_PATH = Path(".env")
-PASSWORD_PREFIX = "POSTGRES_PASSWORD="
+PASSWORD_KEYS = (
+    "POSTGRES_ADMIN_PASSWORD",
+    "POSTGRES_MIGRATOR_PASSWORD",
+    "POSTGRES_RUNTIME_PASSWORD",
+)
 
 
 def build_local_env(template: str) -> str:
-    password = secrets.token_hex(32)
     lines = template.splitlines()
-    matches = [index for index, line in enumerate(lines) if line.startswith(PASSWORD_PREFIX)]
+    for key in PASSWORD_KEYS:
+        prefix = f"{key}="
+        matches = [index for index, line in enumerate(lines) if line.startswith(prefix)]
+        if len(matches) != 1 or lines[matches[0]] != prefix:
+            raise ValueError(f".env.example must contain exactly one blank {key} entry")
+        lines[matches[0]] = f"{prefix}{secrets.token_hex(32)}"
 
-    if matches != [len(lines) - 1]:
-        raise ValueError(".env.example must end with exactly one POSTGRES_PASSWORD entry")
-
-    lines[matches[0]] = f"{PASSWORD_PREFIX}{password}"
     return "\n".join(lines) + "\n"
 
 
@@ -31,7 +35,7 @@ def main() -> None:
     with os.fdopen(descriptor, "w", encoding="utf-8") as env_file:
         env_file.write(content)
 
-    print("Created .env with a random local PostgreSQL password and mode 0600.")
+    print("Created .env with separate random PostgreSQL passwords and mode 0600.")
 
 
 if __name__ == "__main__":

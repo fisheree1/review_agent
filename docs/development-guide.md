@@ -167,6 +167,10 @@ docker compose up --build -d
 docker compose ps
 ```
 
+已有早期 `.env` 时先运行 `python3 scripts/upgrade_local_env.py`。升级脚本保留现有数据库所有者凭据，并添加独立的迁移与运行账号随机密码。
+
 本地 API 与数据库端口只绑定回环地址。`compose.override.yaml` 发布数据库端口供本地工具使用；生产运行只使用基础 `compose.yaml`，不发布数据库端口。API 镜像使用固定的非 root UID/GID，并在 Compose 中启用只读根文件系统、移除 Linux capabilities 和 `no-new-privileges`。
+
+`database-init` 是可重复执行的一次性容器，先以管理员账号幂等配置角色与 schema，再以迁移账号运行 Alembic。API 只接收运行账号凭据。手动执行迁移使用 `docker compose run --rm database-init`，不要从 API 启动流程调用 `create_all()`。当前 `0001_database_baseline` 只建立 Alembic 版本基线，不创建尚未定稿的业务表。
 
 当前健康检查：`/health/live` 验证进程存活，`/health/ready` 验证数据库和 pgvector 可用。后续增加任务队列后，就绪检查只验证当前进程的硬依赖，外部模型故障通过降级和指标展示，不应让整个 API 不健康。

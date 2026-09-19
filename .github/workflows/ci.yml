@@ -4,18 +4,22 @@ on:
   pull_request:
     paths:
       - "app/**"
+      - "migrations/**"
       - "scripts/**"
       - "tests/**"
       - "pyproject.toml"
+      - "alembic.ini"
       - "uv.lock"
       - ".github/workflows/ci.yml"
   push:
     branches: [main]
     paths:
       - "app/**"
+      - "migrations/**"
       - "scripts/**"
       - "tests/**"
       - "pyproject.toml"
+      - "alembic.ini"
       - "uv.lock"
       - ".github/workflows/ci.yml"
   workflow_dispatch:
@@ -53,8 +57,8 @@ jobs:
       - name: Check formatting
         run: uv run ruff format --check .
 
-      - name: Type-check application
-        run: uv run mypy app
+      - name: Type-check application and database operations
+        run: uv run mypy app scripts migrations
 
       - name: Test important behavior
         run: uv run pytest -q
