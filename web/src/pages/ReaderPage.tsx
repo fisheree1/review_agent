@@ -1,15 +1,18 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link, useParams, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 
 import {
   type DocumentSummary,
+  deleteDocument,
+  getDocumentContent,
   getDocument,
-  getDocumentPages,
   isProcessing,
   retryDocument,
 } from "../api/documents";
+import { citationLabel, contentCountLabel, documentTypeLabel } from "../citations";
 import { AppHeader } from "../components/AppHeader";
+import { DeleteDocumentDialog } from "../components/DeleteDocumentDialog";
 import { ErrorState } from "../components/ErrorState";
 import { Icon } from "../components/Icon";
 import { ReaderSettings, type ReadingWidth } from "../components/ReaderSettings";
@@ -17,6 +20,7 @@ import { ReferencePanel } from "../components/ReferencePanel";
 import { ShortcutsDialog } from "../components/ShortcutsDialog";
 import { StatusBadge } from "../components/StatusBadge";
 import { useDocuments } from "../hooks/useDocuments";
+import { useFocusTrap } from "../hooks/useFocusTrap";
 
 function storedFontSize(): number {
   const value = Number(localStorage.getItem("review-agent-font-size"));
@@ -31,7 +35,7 @@ function storedReadingWidth(): ReadingWidth {
 function processingMessage(status: DocumentSummary["status"]): string {
   if (status === "uploaded") return "文件已安全保存，正在准备解析任务。";
   if (status === "queued") return "资料已进入处理队列，可以先离开此页。";
-  return "正在逐页提取正文与页码，通常只需要片刻。";
+  return "正在提取正文与来源位置，通常只需要片刻。";
 }
 
 function isInteractiveTarget(target: EventTarget | null): boolean {
@@ -40,16 +44,26 @@ function isInteractiveTarget(target: EventTarget | null): boolean {
 
 export function ReaderPage() {
   const { documentId = "" } = useParams();
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
   const { documents } = useDocuments();
   const [isNavOpen, setIsNavOpen] = useState(false);
-  const [isReferencesOpen, setIsReferencesOpen] = useState(true);
+  const [isReferencesOpen, setIsReferencesOpen] = useState(
+    () => window.matchMedia("(min-width: 1100px)").matches,
+  );
   const [isShortcutsOpen, setIsShortcutsOpen] = useState(false);
+  const [isDeleteOpen, setIsDeleteOpen] = useState(false);
   const [fontSize, setFontSize] = useState(storedFontSize);
   const [readingWidth, setReadingWidth] = useState<ReadingWidth>(storedReadingWidth);
-  const requestedPage = Number(searchParams.get("page"));
-  const currentPage = Number.isInteger(requestedPage) && requestedPage > 0 ? requestedPage : 1;
+  const navRef = useRef<HTMLElement>(null);
+  const closeNav = useCallback(() => setIsNavOpen(false), []);
+  const closeReferences = useCallback(() => setIsReferencesOpen(false), []);
+  useFocusTrap(navRef, isNavOpen, closeNav);
+  const requestedOrdinal = Number(searchParams.get("unit") ?? searchParams.get("page"));
+  const currentOrdinal = Number.isInteger(requestedOrdinal) && requestedOrdinal > 0
+    ? requestedOrdinal
+    : 1;
   const documentQuery = useQuery({
     queryKey: ["documents", documentId],
     queryFn: () => getDocument(documentId),
@@ -59,9 +73,9 @@ export function ReaderPage() {
       return current && isProcessing(current.status) ? 1800 : false;
     },
   });
-  const pagesQuery = useQuery({
-    queryKey: ["documents", documentId, "pages"],
-    queryFn: () => getDocumentPages(documentId),
+  const contentQuery = useQuery({
+    queryKey: ["documents", documentId, "content", currentOrdinal],
+    queryFn: () => getDocumentContent(documentId, currentOrdinal),
     enabled: documentQuery.data?.status === "ready",
   });
   const retryMutation = useMutation({
@@ -71,10 +85,18 @@ export function ReaderPage() {
       void queryClient.invalidateQueries({ queryKey: ["documents"] });
     },
   });
+  const deleteMutation = useMutation({
+    mutationFn: () => deleteDocument(documentId),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["documents"] });
+      navigate("/", { replace: true });
+    },
+  });
   const document = documentQuery.data ?? null;
-  const pages = pagesQuery.data?.pages ?? [];
-  const error = documentQuery.error ?? pagesQuery.error ?? retryMutation.error;
-  const isLoading = documentQuery.isPending || (document?.status === "ready" && pagesQuery.isPending);
+  const contents = contentQuery.data?.contents ?? [];
+  const contentCount = document?.content_count ?? contentQuery.data?.content_count ?? 0;
+  const error = documentQuery.error ?? contentQuery.error ?? retryMutation.error;
+  const isLoading = documentQuery.isPending || (document?.status === "ready" && contentQuery.isPending);
 
   useEffect(() => {
     localStorage.setItem("review-agent-font-size", String(fontSize));
@@ -85,26 +107,26 @@ export function ReaderPage() {
   }, [readingWidth]);
 
   useEffect(() => {
-    if (pages.length === 0 || !searchParams.has("page")) return;
-    const boundedPage = Math.min(Math.max(currentPage, 1), pages.length);
-    if (boundedPage !== currentPage) {
-      setSearchParams({ page: String(boundedPage) }, { replace: true });
+    if (contentCount === 0 || (!searchParams.has("unit") && !searchParams.has("page"))) return;
+    const boundedOrdinal = Math.min(Math.max(currentOrdinal, 1), contentCount);
+    if (boundedOrdinal !== currentOrdinal || searchParams.has("page")) {
+      setSearchParams({ unit: String(boundedOrdinal) }, { replace: true });
       return;
     }
     window.requestAnimationFrame(() => {
-      window.document.getElementById(`page-${boundedPage}`)?.scrollIntoView({ block: "start" });
+      window.document.getElementById(`content-${boundedOrdinal}`)?.scrollIntoView({ block: "start" });
     });
-  }, [currentPage, pages.length, searchParams, setSearchParams]);
+  }, [contentCount, currentOrdinal, searchParams, setSearchParams]);
 
-  const selectPage = useCallback((pageNumber: number) => {
-    const bounded = Math.min(Math.max(pageNumber, 1), Math.max(pages.length, 1));
-    setSearchParams({ page: String(bounded) }, { replace: true });
+  const selectContent = useCallback((ordinal: number) => {
+    const bounded = Math.min(Math.max(ordinal, 1), Math.max(contentCount, 1));
+    setSearchParams({ unit: String(bounded) }, { replace: true });
     window.requestAnimationFrame(() => {
-      const target = window.document.getElementById(`page-${bounded}`);
+      const target = window.document.getElementById(`content-${bounded}`);
       target?.scrollIntoView({ behavior: "smooth", block: "start" });
       target?.focus({ preventScroll: true });
     });
-  }, [pages.length, setSearchParams]);
+  }, [contentCount, setSearchParams]);
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
@@ -117,22 +139,22 @@ export function ReaderPage() {
         setIsReferencesOpen((value) => !value);
       } else if (event.key === "[") {
         event.preventDefault();
-        selectPage(currentPage - 1);
+        selectContent(currentOrdinal - 1);
       } else if (event.key === "]") {
         event.preventDefault();
-        selectPage(currentPage + 1);
+        selectContent(currentOrdinal + 1);
       } else if (event.key === "Escape") {
-        setIsNavOpen(false);
-        setIsReferencesOpen(false);
+        closeNav();
+        closeReferences();
       }
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [currentPage, selectPage]);
+  }, [closeNav, closeReferences, currentOrdinal, selectContent]);
 
   const selectedReference = useMemo(
-    () => pages.find((page) => page.page_number === currentPage),
-    [currentPage, pages],
+    () => contents.find((content) => content.ordinal === currentOrdinal),
+    [contents, currentOrdinal],
   );
 
   return (
@@ -156,11 +178,17 @@ export function ReaderPage() {
       </AppHeader>
 
       <div className={`reader-shell${isReferencesOpen ? " reader-shell--with-references" : ""}`}>
-        {isNavOpen ? <button aria-label="关闭资料导航" className="scrim" onClick={() => setIsNavOpen(false)} type="button" /> : null}
-        <aside className={`reader-nav${isNavOpen ? " reader-nav--open" : ""}`}>
+        {isNavOpen ? <button aria-label="关闭资料导航" className="scrim" onClick={closeNav} type="button" /> : null}
+        <aside
+          aria-label="资料导航"
+          aria-modal={isNavOpen || undefined}
+          className={`reader-nav${isNavOpen ? " reader-nav--open" : ""}`}
+          ref={navRef}
+          role={isNavOpen ? "dialog" : undefined}
+        >
           <div className="reader-nav__header">
             <span className="eyebrow">资料库</span>
-            <button aria-label="关闭资料导航" className="icon-button mobile-only" onClick={() => setIsNavOpen(false)} type="button"><Icon name="close" /></button>
+            <button aria-label="关闭资料导航" className="icon-button mobile-only" onClick={closeNav} type="button"><Icon name="close" /></button>
           </div>
           <Link className="reader-nav__back" to="/"><Icon name="chevronLeft" />返回全部资料</Link>
           <nav aria-label="资料列表" className="reader-nav__list">
@@ -169,7 +197,7 @@ export function ReaderPage() {
                 aria-current={item.id === documentId ? "page" : undefined}
                 className={item.id === documentId ? "reader-nav__item reader-nav__item--active" : "reader-nav__item"}
                 key={item.id}
-                onClick={() => setIsNavOpen(false)}
+                onClick={closeNav}
                 to={`/documents/${item.id}`}
               >
                 <Icon name="document" />
@@ -207,24 +235,30 @@ export function ReaderPage() {
             >
               <header className="document-reader__header">
                 <Link className="text-link" to="/"><Icon name="chevronLeft" />资料库</Link>
-                <span className="eyebrow">{document.page_count ?? pages.length} 页 · PDF</span>
+                <span className="eyebrow">{contentCountLabel(document)} · {documentTypeLabel(document.media_type)}</span>
                 <h1>{document.filename}</h1>
-                <p>正文按原始页码保留。使用 <kbd>[</kbd> 与 <kbd>]</kbd> 可以逐页移动。</p>
+                <p>正文保留原始来源位置。使用 <kbd>[</kbd> 与 <kbd>]</kbd> 可以前后移动。</p>
+                <button className="button button--danger-quiet document-reader__delete" onClick={() => setIsDeleteOpen(true)} type="button">
+                  删除资料
+                </button>
               </header>
               <div className="page-stack">
-                {pages.map((page) => (
+                {contents.map((content) => (
                   <section
-                    aria-label={`第 ${page.page_number} 页`}
-                    className={`reading-page${page.page_number === currentPage ? " reading-page--current" : ""}`}
-                    id={`page-${page.page_number}`}
-                    key={page.page_number}
-                    onClick={() => setSearchParams({ page: String(page.page_number) }, { replace: true })}
+                    aria-label={citationLabel(content.citation_locator)}
+                    className={`reading-page${content.ordinal === currentOrdinal ? " reading-page--current" : ""}`}
+                    id={`content-${content.ordinal}`}
+                    key={content.ordinal}
+                    onClick={() => setSearchParams({ unit: String(content.ordinal) }, { replace: true })}
                     tabIndex={-1}
                   >
-                    <div className="reading-page__number"><span>第 {page.page_number} 页</span><span>PAGE {String(page.page_number).padStart(2, "0")}</span></div>
+                    <div className="reading-page__number">
+                      <span>{citationLabel(content.citation_locator)}</span>
+                      <span>SOURCE {String(content.ordinal).padStart(2, "0")}</span>
+                    </div>
                     <div className="reading-page__content">
-                      {page.content.split(/\n{2,}/).map((paragraph, index) => (
-                        paragraph.trim() ? <p key={`${page.page_number}-${index}`}>{paragraph.trim()}</p> : null
+                      {content.content.split(/\n{2,}/).map((paragraph, index) => (
+                        paragraph.trim() ? <p key={`${content.ordinal}-${index}`}>{paragraph.trim()}</p> : null
                       ))}
                     </div>
                   </section>
@@ -235,23 +269,35 @@ export function ReaderPage() {
         </main>
 
         <ReferencePanel
-          currentPage={currentPage}
+          currentOrdinal={currentOrdinal}
           isOpen={isReferencesOpen}
-          onClose={() => setIsReferencesOpen(false)}
-          onSelect={(page) => { selectPage(page); if (window.innerWidth < 1100) setIsReferencesOpen(false); }}
-          pages={pages}
+          onClose={closeReferences}
+          onSelect={(ordinal) => { selectContent(ordinal); if (window.innerWidth < 1100) setIsReferencesOpen(false); }}
+          contentCount={contentCount}
+          contents={contents}
+          locations={contentQuery.data?.locations ?? []}
         />
       </div>
 
-      {document?.status === "ready" && pages.length > 0 ? (
+      {document?.status === "ready" && contentCount > 0 ? (
         <div aria-live="polite" className="reader-footer">
-          <button aria-label="上一页" disabled={currentPage <= 1} onClick={() => selectPage(currentPage - 1)} type="button"><Icon name="chevronLeft" /></button>
-          <span>第 {currentPage} / {pages.length} 页</span>
-          <button aria-label="下一页" disabled={currentPage >= pages.length} onClick={() => selectPage(currentPage + 1)} type="button"><Icon name="chevronRight" /></button>
-          {selectedReference ? <span className="reader-footer__hint">已定位来源页</span> : null}
+          <button aria-label="上一个来源" disabled={currentOrdinal <= 1} onClick={() => selectContent(currentOrdinal - 1)} type="button"><Icon name="chevronLeft" /></button>
+          <span>{selectedReference ? citationLabel(selectedReference.citation_locator) : `来源 ${currentOrdinal}`} · {currentOrdinal} / {contentCount}</span>
+          <button aria-label="下一个来源" disabled={currentOrdinal >= contentCount} onClick={() => selectContent(currentOrdinal + 1)} type="button"><Icon name="chevronRight" /></button>
+          {selectedReference ? <span className="reader-footer__hint">已定位来源</span> : null}
         </div>
       ) : null}
       <ShortcutsDialog isOpen={isShortcutsOpen} onClose={() => setIsShortcutsOpen(false)} />
+      {document ? (
+        <DeleteDocumentDialog
+          error={deleteMutation.error?.message ?? null}
+          filename={document.filename}
+          isDeleting={deleteMutation.isPending}
+          isOpen={isDeleteOpen}
+          onClose={() => { if (!deleteMutation.isPending) setIsDeleteOpen(false); }}
+          onConfirm={() => deleteMutation.mutate()}
+        />
+      ) : null}
     </div>
   );
 }

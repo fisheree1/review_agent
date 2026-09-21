@@ -1,16 +1,19 @@
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.responses import JSONResponse
-from sqlalchemy import text
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.core.database import close_database, get_db_session, verify_runtime_database_role
 from app.core.errors import ApplicationError
+from app.core.request_limits import RequestBodyLimitMiddleware
 from app.documents.api import router as documents_router
+from app.jobs.models import WorkerHeartbeatModel
 
 settings = get_settings()
 
@@ -26,6 +29,11 @@ app = FastAPI(
     title=settings.app_name,
     version=settings.app_version,
     lifespan=lifespan,
+)
+app.add_middleware(
+    RequestBodyLimitMiddleware,
+    path="/api/v1/documents",
+    max_bytes=settings.max_upload_bytes + 1024 * 1024,
 )
 app.include_router(documents_router)
 
@@ -88,4 +96,37 @@ async def readiness(
         "status": "ok",
         "database": database,
         "pgvector": True,
+    }
+
+
+@app.get("/health/worker", tags=["health"])
+async def worker_readiness(
+    session: AsyncSession = Depends(get_db_session),
+) -> dict[str, Any]:
+    try:
+        last_seen_at = await session.scalar(
+            select(func.max(WorkerHeartbeatModel.last_seen_at)).where(
+                WorkerHeartbeatModel.worker_type == "document-parser"
+            )
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Document worker health is unavailable",
+        ) from exc
+    if last_seen_at is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Document worker has not reported readiness",
+        )
+    age_seconds = (datetime.now(UTC) - last_seen_at).total_seconds()
+    if age_seconds > settings.worker_health_stale_seconds:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Document worker heartbeat is stale",
+        )
+    return {
+        "status": "ok",
+        "worker": "document-parser",
+        "last_seen_at": last_seen_at,
     }

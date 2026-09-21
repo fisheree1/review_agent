@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 
 from minio import Minio, MinioAdmin
-from minio.credentials import StaticProvider
+from minio.credentials.providers import StaticProvider
 from minio.error import MinioAdminException
 
 from app.core.config import StorageSettings

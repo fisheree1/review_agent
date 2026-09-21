@@ -257,9 +257,10 @@ def verify(sample_path: Path, *, base_url: str) -> None:
 
         pages_response = client.get(f"/api/v1/documents/{document_id}/pages", headers=auth_headers)
         pages_response.raise_for_status()
-        pages = pages_response.json()["pages"]
-        if len(pages) != document["page_count"] or not pages:
-            raise RuntimeError("Page count does not match the extracted page records")
+        pages_payload = pages_response.json()
+        pages = pages_payload["pages"]
+        if pages_payload["page_count"] != document["page_count"] or len(pages) != 1:
+            raise RuntimeError("Paginated page response does not match document metadata")
         if pages[0]["page_number"] != 1 or not pages[0]["content"].strip():
             raise RuntimeError("The first page is missing its number or extractable text")
 
@@ -392,7 +393,7 @@ def verify(sample_path: Path, *, base_url: str) -> None:
     preview = " ".join(pages[0]["content"].split())[:100]
     print(
         "Document flow verified: "
-        f"id={document_id}, pages={len(pages)}, first_page_preview={preview!r}."
+        f"id={document_id}, pages={document['page_count']}, first_page_preview={preview!r}."
     )
     print(
         "Failure, idempotent retry, workspace isolation, private storage, "
@@ -402,10 +403,17 @@ def verify(sample_path: Path, *, base_url: str) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Verify the local PDF ingestion flow")
-    parser.add_argument("sample_pdf", type=Path)
+    parser.add_argument("sample_pdf", nargs="?", type=Path)
     parser.add_argument("--base-url", default="http://127.0.0.1:8000")
     arguments = parser.parse_args()
-    verify(arguments.sample_pdf.resolve(), base_url=arguments.base_url)
+    if arguments.sample_pdf is not None:
+        verify(arguments.sample_pdf.resolve(), base_url=arguments.base_url)
+        return
+
+    with tempfile.TemporaryDirectory(prefix="review-agent-smoke-") as temporary_dir:
+        sample_path = Path(temporary_dir) / "ci-smoke.pdf"
+        _write_text_pdf(sample_path, text="Traceable review agent smoke test")
+        verify(sample_path, base_url=arguments.base_url)
 
 
 if __name__ == "__main__":

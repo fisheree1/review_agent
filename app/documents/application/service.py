@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
+import logging
 import re
 from dataclasses import dataclass
 from datetime import datetime
@@ -16,11 +17,12 @@ from app.documents.application.ports import (
     UnitOfWorkFactory,
     UploadSource,
 )
-from app.documents.application.upload_validation import StagedUpload, stage_pdf_upload
+from app.documents.application.upload_validation import StagedUpload, stage_document_upload
 from app.documents.domain.entities import (
     Document,
+    DocumentContent,
+    DocumentContentLocation,
     DocumentListPosition,
-    DocumentPage,
     DocumentStatus,
 )
 
@@ -37,6 +39,16 @@ class UploadResult:
 class DocumentListResult:
     items: tuple[Document, ...]
     next_cursor: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class DocumentContentResult:
+    content_count: int
+    contents: tuple[DocumentContent, ...]
+    locations: tuple[DocumentContentLocation, ...]
+
+
+logger = logging.getLogger(__name__)
 
 
 class DocumentService:
@@ -70,7 +82,7 @@ class DocumentService:
         source: UploadSource,
         idempotency_key: str | None,
     ) -> UploadResult:
-        staged = await stage_pdf_upload(source, max_bytes=self._max_upload_bytes)
+        staged = await stage_document_upload(source, max_bytes=self._max_upload_bytes)
         try:
             return await self._persist_upload(
                 workspace_public_id=workspace_public_id,
@@ -92,47 +104,89 @@ class DocumentService:
             upload_key=upload_key,
             sha256=staged.sha256,
         )
-        if existing is not None and not (
-            existing.status == DocumentStatus.FAILED
-            and existing.failure_code == "STORAGE_UPLOAD_FAILED"
-        ):
+        recoverable_upload = existing is not None and (
+            existing.status == DocumentStatus.UPLOADED
+            or (
+                existing.status == DocumentStatus.FAILED
+                and existing.failure_code == "STORAGE_UPLOAD_FAILED"
+            )
+        )
+        if existing is not None and not recoverable_upload:
             return UploadResult(document=existing, deduplicated=True)
 
-        document = existing
-        if document is None:
-            document_public_id = uuid4()
-            object_key = f"{workspace_public_id}/{document_public_id}/source.pdf"
-            try:
-                async with self._unit_of_work_factory() as unit_of_work:
-                    workspace_id = await unit_of_work.documents.ensure_workspace(
-                        workspace_public_id
-                    )
-                    document = await unit_of_work.documents.create_document(
-                        workspace_id=workspace_id,
-                        workspace_public_id=workspace_public_id,
-                        public_id=document_public_id,
-                        original_filename=staged.original_filename,
-                        media_type=staged.media_type,
-                        byte_size=staged.byte_size,
-                        sha256=staged.sha256,
-                        object_key=object_key,
-                        upload_key=upload_key,
-                    )
-                    await unit_of_work.commit()
-            except DuplicateDocumentError:
-                document = await self._find_existing_upload(
-                    workspace_public_id=workspace_public_id,
-                    upload_key=upload_key,
-                    sha256=staged.sha256,
-                )
-                if document is None:
-                    raise ApplicationError(
-                        code="DUPLICATE_UPLOAD_CONFLICT",
-                        message="相同请求正在处理，请稍后查询资料状态",
-                        status_code=409,
-                    ) from None
+        if existing is not None:
+            return await self._resume_incomplete_upload(
+                workspace_public_id=workspace_public_id,
+                document=existing,
+                staged=staged,
+            )
 
-        object_key = f"{workspace_public_id}/{document.public_id}/source.pdf"
+        document_public_id = uuid4()
+        object_key = (
+            f"{workspace_public_id}/{document_public_id}/source{staged.path.suffix.lower()}"
+        )
+        try:
+            await self._storage.upload(
+                object_key=object_key,
+                source_path=staged.path,
+                length=staged.byte_size,
+            )
+        except StorageOperationError as exc:
+            raise ApplicationError(
+                code="STORAGE_UNAVAILABLE",
+                message="文件暂时无法保存，请稍后重试",
+                status_code=503,
+            ) from exc
+
+        try:
+            async with self._unit_of_work_factory() as unit_of_work:
+                workspace_id = await unit_of_work.documents.ensure_workspace(workspace_public_id)
+                await unit_of_work.documents.create_document(
+                    workspace_id=workspace_id,
+                    workspace_public_id=workspace_public_id,
+                    public_id=document_public_id,
+                    original_filename=staged.original_filename,
+                    media_type=staged.media_type,
+                    byte_size=staged.byte_size,
+                    sha256=staged.sha256,
+                    object_key=object_key,
+                    upload_key=upload_key,
+                )
+                queued = await unit_of_work.documents.queue_initial_processing(
+                    workspace_public_id=workspace_public_id,
+                    document_public_id=document_public_id,
+                    job_public_id=uuid4(),
+                )
+                await unit_of_work.commit()
+        except DuplicateDocumentError:
+            await self._delete_orphaned_object(object_key)
+            duplicate = await self._find_existing_upload(
+                workspace_public_id=workspace_public_id,
+                upload_key=upload_key,
+                sha256=staged.sha256,
+            )
+            if duplicate is None:
+                raise ApplicationError(
+                    code="DUPLICATE_UPLOAD_CONFLICT",
+                    message="相同请求正在处理，请稍后查询资料状态",
+                    status_code=409,
+                ) from None
+            return UploadResult(document=duplicate, deduplicated=True)
+        except Exception:
+            await self._delete_orphaned_object(object_key)
+            raise
+        return UploadResult(document=queued, deduplicated=False)
+
+    async def _resume_incomplete_upload(
+        self,
+        *,
+        workspace_public_id: UUID,
+        document: Document,
+        staged: StagedUpload,
+    ) -> UploadResult:
+        object_key = (
+            f"{workspace_public_id}/{document.public_id}/source{staged.path.suffix.lower()}"
+        )
         try:
             await self._storage.upload(
                 object_key=object_key,
@@ -162,7 +216,16 @@ class DocumentService:
                 job_public_id=uuid4(),
             )
             await unit_of_work.commit()
-        return UploadResult(document=queued, deduplicated=existing is not None)
+        return UploadResult(document=queued, deduplicated=True)
+
+    async def _delete_orphaned_object(self, object_key: str) -> None:
+        try:
+            await self._storage.delete(object_key=object_key)
+        except StorageOperationError:
+            logger.warning(
+                "document_upload_orphan_cleanup_failed",
+                extra={"object_key": object_key},
+            )
 
     async def _find_existing_upload(
         self,
@@ -248,9 +311,13 @@ class DocumentService:
             next_cursor=self._encode_cursor(page.next_position),
         )
 
-    async def pages(
-        self, *, workspace_public_id: UUID, document_public_id: UUID
-    ) -> tuple[DocumentPage, ...]:
+    async def content(
+        self,
+        *,
+        workspace_public_id: UUID,
+        document_public_id: UUID,
+        ordinal: int,
+    ) -> DocumentContentResult:
         document = await self.get(
             workspace_public_id=workspace_public_id,
             document_public_id=document_public_id,
@@ -262,11 +329,30 @@ class DocumentService:
                 status_code=409,
                 details={"status": document.status.value},
             )
+        content_count = document.page_count or 0
+        if ordinal > content_count:
+            raise ApplicationError(
+                code="CONTENT_NOT_FOUND",
+                message="该来源位置超出资料范围",
+                status_code=404,
+                details={"content_count": content_count},
+            )
         async with self._unit_of_work_factory() as unit_of_work:
-            return await unit_of_work.documents.list_pages(
+            contents = await unit_of_work.documents.list_content(
+                workspace_public_id=workspace_public_id,
+                document_public_id=document_public_id,
+                start_ordinal=ordinal,
+                limit=1,
+            )
+            locations = await unit_of_work.documents.list_content_locations(
                 workspace_public_id=workspace_public_id,
                 document_public_id=document_public_id,
             )
+        return DocumentContentResult(
+            content_count=content_count,
+            contents=contents,
+            locations=locations,
+        )
 
     async def retry(
         self,

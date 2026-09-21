@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import os
 import secrets
+from collections.abc import Callable
 from pathlib import Path
 from uuid import uuid4
 
 TEMPLATE_PATH = Path(".env.example")
 OUTPUT_PATH = Path(".env")
-GENERATED_VALUES = {
+GENERATED_VALUES: dict[str, Callable[[], str]] = {
     "POSTGRES_ADMIN_PASSWORD": lambda: secrets.token_hex(32),
     "POSTGRES_MIGRATOR_PASSWORD": lambda: secrets.token_hex(32),
     "POSTGRES_RUNTIME_PASSWORD": lambda: secrets.token_hex(32),

@@ -7,12 +7,14 @@ on:
       - "docker/**"
       - "migrations/**"
       - "Dockerfile"
+      - "Dockerfile.web"
       - "alembic.ini"
       - "compose.yaml"
       - "compose.override.yaml"
       - "pyproject.toml"
       - "scripts/**"
       - "uv.lock"
+      - "web/**"
       - ".github/workflows/container-smoke.yml"
   push:
     branches: [main]
@@ -21,12 +23,14 @@ on:
       - "docker/**"
       - "migrations/**"
       - "Dockerfile"
+      - "Dockerfile.web"
       - "alembic.ini"
       - "compose.yaml"
       - "compose.override.yaml"
       - "pyproject.toml"
       - "scripts/**"
       - "uv.lock"
+      - "web/**"
       - ".github/workflows/container-smoke.yml"
   workflow_dispatch:
 
@@ -54,20 +58,27 @@ jobs:
       - name: Verify network exposure policy
         run: |
           docker compose config --format json \
-            | jq -e '.services.api.ports[0].host_ip == "127.0.0.1" and .services.db.ports[0].host_ip == "127.0.0.1"'
+            | jq -e '.services.api.ports[0].host_ip == "127.0.0.1" and .services.web.ports[0].host_ip == "127.0.0.1" and .services.db.ports[0].host_ip == "127.0.0.1" and .services.minio.ports[0].host_ip == "127.0.0.1"'
           docker compose -f compose.yaml config --format json \
             | jq -e '(.services.db.ports // []) | length == 0'
 
       - name: Start application stack
         run: docker compose up --build --wait --wait-timeout 120 -d
 
-      - name: Verify API and database readiness
-        run: curl --fail --silent --show-error http://localhost:8000/health/ready
+      - name: Verify API, web, and database readiness
+        run: |
+          curl --fail --silent --show-error http://localhost:8000/health/ready
+          curl --fail --silent --show-error http://localhost:5173/
 
       - name: Verify migration idempotency and runtime privileges
         run: |
           docker compose run --rm database-init
+          docker compose run --rm database-init python -m scripts.verify_document_tenant_constraints
           docker compose exec -T api python -m scripts.verify_runtime_database_access
+          docker compose exec -T api python -m scripts.verify_storage_access
+
+      - name: Verify private PDF lifecycle
+        run: docker compose exec -T api python -m scripts.verify_document_flow --base-url http://localhost:8000
 
       - name: Show logs after failure
         if: failure()

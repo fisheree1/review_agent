@@ -37,6 +37,7 @@ services:
       LOCAL_API_TOKEN: ${LOCAL_API_TOKEN:?Run python3 scripts/init_local_env.py or scripts/upgrade_local_env.py first}
       LOCAL_WORKSPACE_ID: ${LOCAL_WORKSPACE_ID:?Run python3 scripts/init_local_env.py or scripts/upgrade_local_env.py first}
       MAX_UPLOAD_BYTES: ${MAX_UPLOAD_BYTES:-26214400}
+      WORKER_HEALTH_STALE_SECONDS: ${WORKER_HEALTH_STALE_SECONDS:-30}
       STORAGE_ENDPOINT: minio:9000
       STORAGE_ACCESS_KEY: ${STORAGE_ACCESS_KEY:?Run python3 scripts/init_local_env.py or scripts/upgrade_local_env.py first}
       STORAGE_SECRET_KEY: ${STORAGE_SECRET_KEY:?Run python3 scripts/init_local_env.py or scripts/upgrade_local_env.py first}
@@ -91,11 +92,28 @@ services:
       PDF_PARSER_TIMEOUT_SECONDS: ${PDF_PARSER_TIMEOUT_SECONDS:-60}
       MAX_PDF_PAGES: ${MAX_PDF_PAGES:-500}
       MAX_PDF_CHARACTERS: ${MAX_PDF_CHARACTERS:-5000000}
+      OFFICE_PARSER_TIMEOUT_SECONDS: ${OFFICE_PARSER_TIMEOUT_SECONDS:-60}
+      MAX_OFFICE_UNITS: ${MAX_OFFICE_UNITS:-1000}
+      MAX_OFFICE_CHARACTERS: ${MAX_OFFICE_CHARACTERS:-5000000}
+      MAX_OFFICE_UNCOMPRESSED_BYTES: ${MAX_OFFICE_UNCOMPRESSED_BYTES:-104857600}
+      WORKER_HEARTBEAT_SECONDS: ${WORKER_HEARTBEAT_SECONDS:-5}
     depends_on:
       database-init:
         condition: service_completed_successfully
       storage-init:
         condition: service_completed_successfully
+      api:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://api:8000/health/worker')"
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 20s
     init: true
     user: "10001:10001"
     read_only: true

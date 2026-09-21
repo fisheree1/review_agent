@@ -8,6 +8,7 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     Identity,
     Index,
     Integer,
@@ -17,6 +18,7 @@ from sqlalchemy import (
     func,
     text,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PostgreSQLUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -51,6 +53,7 @@ class DocumentModel(Base):
     __tablename__ = "documents"
     __table_args__ = (
         UniqueConstraint("workspace_id", "upload_idempotency_key", name="uq_documents_upload_key"),
+        UniqueConstraint("id", "workspace_id", name="uq_documents_id_workspace"),
         CheckConstraint("byte_size > 0", name="ck_documents_byte_size_positive"),
         CheckConstraint("page_count IS NULL OR page_count >= 0", name="ck_documents_page_count"),
         CheckConstraint(
@@ -69,6 +72,15 @@ class DocumentModel(Base):
         ),
         Index("ix_documents_workspace_created", "workspace_id", "created_at", "id"),
         Index("ix_documents_workspace_id", "workspace_id"),
+        ForeignKeyConstraint(
+            ["active_version_id", "id"],
+            [
+                f"{APPLICATION_SCHEMA}.document_versions.id",
+                f"{APPLICATION_SCHEMA}.document_versions.document_id",
+            ],
+            name="fk_documents_active_version_owner",
+            use_alter=True,
+        ),
         {"schema": APPLICATION_SCHEMA},
     )
 
@@ -77,7 +89,8 @@ class DocumentModel(Base):
         PostgreSQLUUID(as_uuid=True), unique=True, nullable=False, default=uuid4
     )
     workspace_id: Mapped[int] = mapped_column(
-        ForeignKey(f"{APPLICATION_SCHEMA}.workspaces.id", ondelete="RESTRICT"), nullable=False
+        ForeignKey(f"{APPLICATION_SCHEMA}.workspaces.id", ondelete="RESTRICT"),
+        nullable=False,
     )
     original_filename: Mapped[str] = mapped_column(String(255), nullable=False)
     media_type: Mapped[str] = mapped_column(String(100), nullable=False)
@@ -87,12 +100,7 @@ class DocumentModel(Base):
     upload_idempotency_key: Mapped[str] = mapped_column(String(200), nullable=False)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="uploaded")
     active_version_id: Mapped[int | None] = mapped_column(
-        ForeignKey(
-            f"{APPLICATION_SCHEMA}.document_versions.id",
-            name="fk_documents_active_version_id",
-            ondelete="SET NULL",
-            use_alter=True,
-        ),
+        BigInteger,
         nullable=True,
     )
     failure_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
@@ -111,6 +119,8 @@ class DocumentVersionModel(Base):
     __tablename__ = "document_versions"
     __table_args__ = (
         UniqueConstraint("document_id", "version_no", name="uq_document_versions_number"),
+        UniqueConstraint("id", "document_id", name="uq_document_versions_id_document"),
+        UniqueConstraint("id", "workspace_id", name="uq_document_versions_id_workspace"),
         UniqueConstraint(
             "document_id",
             "source_sha256",
@@ -122,12 +132,25 @@ class DocumentVersionModel(Base):
         CheckConstraint("page_count >= 0", name="ck_document_versions_page_count"),
         CheckConstraint("status IN ('ready')", name="ck_document_versions_status"),
         Index("ix_document_versions_document_id", "document_id"),
+        ForeignKeyConstraint(
+            ["document_id", "workspace_id"],
+            [
+                f"{APPLICATION_SCHEMA}.documents.id",
+                f"{APPLICATION_SCHEMA}.documents.workspace_id",
+            ],
+            name="fk_document_versions_document_workspace",
+            ondelete="CASCADE",
+        ),
         {"schema": APPLICATION_SCHEMA},
     )
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
     document_id: Mapped[int] = mapped_column(
-        ForeignKey(f"{APPLICATION_SCHEMA}.documents.id", ondelete="CASCADE"), nullable=False
+        BigInteger,
+        nullable=False,
+    )
+    workspace_id: Mapped[int] = mapped_column(
+        ForeignKey(f"{APPLICATION_SCHEMA}.workspaces.id", ondelete="RESTRICT"), nullable=False
     )
     version_no: Mapped[int] = mapped_column(Integer, nullable=False)
     source_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -146,13 +169,30 @@ class DocumentPageModel(Base):
         UniqueConstraint("document_version_id", "page_number", name="uq_document_pages_number"),
         CheckConstraint("page_number > 0", name="ck_document_pages_number_positive"),
         CheckConstraint("char_count >= 0", name="ck_document_pages_char_count"),
+        CheckConstraint(
+            "locator_kind IN ('page', 'heading', 'slide')",
+            name="ck_document_pages_locator_kind",
+        ),
+        CheckConstraint(
+            "locator_position > 0",
+            name="ck_document_pages_locator_position_positive",
+        ),
         Index("ix_document_pages_workspace_version", "workspace_id", "document_version_id"),
+        ForeignKeyConstraint(
+            ["document_version_id", "workspace_id"],
+            [
+                f"{APPLICATION_SCHEMA}.document_versions.id",
+                f"{APPLICATION_SCHEMA}.document_versions.workspace_id",
+            ],
+            name="fk_document_pages_version_workspace",
+            ondelete="CASCADE",
+        ),
         {"schema": APPLICATION_SCHEMA},
     )
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
     document_version_id: Mapped[int] = mapped_column(
-        ForeignKey(f"{APPLICATION_SCHEMA}.document_versions.id", ondelete="CASCADE"),
+        BigInteger,
         nullable=False,
     )
     workspace_id: Mapped[int] = mapped_column(
@@ -161,6 +201,12 @@ class DocumentPageModel(Base):
     page_number: Mapped[int] = mapped_column(Integer, nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
     char_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    locator_kind: Mapped[str] = mapped_column(String(20), nullable=False)
+    locator_position: Mapped[int] = mapped_column(Integer, nullable=False)
+    locator_title: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    locator_path: Mapped[list[str]] = mapped_column(
+        JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb")
+    )
 
 
 class ProcessingJobModel(Base):
@@ -169,7 +215,9 @@ class ProcessingJobModel(Base):
         UniqueConstraint(
             "workspace_id", "job_type", "idempotency_key", name="uq_processing_jobs_idempotency"
         ),
-        CheckConstraint("job_type IN ('pdf_parse')", name="ck_processing_jobs_type"),
+        CheckConstraint(
+            "job_type IN ('pdf_parse', 'document_parse')", name="ck_processing_jobs_type"
+        ),
         CheckConstraint(
             "status IN ('queued', 'processing', 'succeeded', 'failed', 'cancelled')",
             name="ck_processing_jobs_status",
@@ -198,7 +246,7 @@ class ProcessingJobModel(Base):
     document_id: Mapped[int] = mapped_column(
         ForeignKey(f"{APPLICATION_SCHEMA}.documents.id", ondelete="RESTRICT"), nullable=False
     )
-    job_type: Mapped[str] = mapped_column(String(30), nullable=False, default="pdf_parse")
+    job_type: Mapped[str] = mapped_column(String(30), nullable=False, default="document_parse")
     idempotency_key: Mapped[str] = mapped_column(String(240), nullable=False)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="queued")
     attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

@@ -1,6 +1,7 @@
 import { Link } from "react-router-dom";
 
 import { type DocumentSummary } from "../api/documents";
+import { contentCountLabel, documentTypeLabel } from "../citations";
 import { Icon } from "./Icon";
 import { StatusBadge } from "./StatusBadge";
 
@@ -46,7 +47,7 @@ export function DocumentList({
       <div className="empty-state">
         <span><Icon name="library" /></span>
         <h3>资料库还是空的</h3>
-        <p>上传第一份文本型 PDF，解析完成后就能按页阅读。</p>
+        <p>上传第一份 PDF、DOCX 或 PPTX，解析完成后即可按来源位置阅读。</p>
       </div>
     );
   }
@@ -68,7 +69,9 @@ export function DocumentList({
                 <p>
                   {formatBytes(document.byte_size)}
                   <span aria-hidden="true"> · </span>
-                  {document.page_count ? `${document.page_count} 页` : "正在确认页数"}
+                  {contentCountLabel(document)}
+                  <span aria-hidden="true"> · </span>
+                  {documentTypeLabel(document.media_type)}
                 </p>
                 {document.status === "failed" ? (
                   <p className="document-card__error">{document.failure_message ?? "处理失败，请稍后重试"}</p>

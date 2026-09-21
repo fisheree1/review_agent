@@ -1,6 +1,6 @@
 # Review Agent
 
-面向学习资料的 AI 学习平台。当前已具备 React 资料库与阅读器、FastAPI 文档接口、私有文件存储和后台 PDF 解析；后续将扩展可追溯 RAG 与按要求生成 Quiz。
+面向学习资料的 AI 学习平台。当前已具备 React 资料库与阅读器、FastAPI 文档接口、私有文件存储，以及 PDF、DOCX、PPTX 后台解析；后续将扩展可追溯 RAG 与按要求生成 Quiz。
 
 ## 项目文档
 
@@ -55,10 +55,11 @@ app/
 - Alembic 迁移、数据库管理员/迁移/运行账号分离。
 - 私有 MinIO 原文件存储，管理凭据与应用 bucket 凭据分离。
 - 独立 Worker、持久化任务租约与幂等重试。
-- 文本型 PDF 流式上传校验、逐页正文解析、状态查询、失败说明和删除。
-- React 资料库、上传进度、处理状态、按页正文阅读和来源定位面板。
-- API 与数据库存活/就绪健康检查。
-- 基础自动化测试。
+- PDF、DOCX、PPTX 流式上传校验、正文解析、状态查询、失败说明和删除。
+- PDF 页码、DOCX 标题路径、PPTX 幻灯片编号使用统一 citation locator。
+- React 资料库、上传进度、处理状态、按来源位置阅读和引用面板。
+- API、数据库与文档 Worker 存活/就绪健康检查。
+- 后端、前端与容器闭环自动化测试。
 
 ## 启动
 
@@ -81,6 +82,7 @@ docker compose up --build -d
 docker compose ps
 curl http://localhost:8000/health/live
 curl http://localhost:8000/health/ready
+curl http://localhost:8000/health/worker
 ```
 
 阅读页面：<http://127.0.0.1:5173>
@@ -98,7 +100,7 @@ docker compose exec -T api python -m scripts.verify_runtime_database_access
 docker compose exec -T api python -m scripts.verify_storage_access
 ```
 
-### 上传并查看 PDF 正文
+### 上传并查看资料正文
 
 本地令牌来自 `.env`，不要把它复制进代码、文档或 Git：
 
@@ -109,17 +111,17 @@ set +a
 
 curl -X POST http://127.0.0.1:8000/api/v1/documents \
   -H "Authorization: Bearer ${LOCAL_API_TOKEN}" \
-  -H "Idempotency-Key: my-first-pdf" \
+  -H "Idempotency-Key: my-first-document" \
   -F "file=@/absolute/path/to/material.pdf;type=application/pdf"
 
 curl http://127.0.0.1:8000/api/v1/documents/<document-id> \
   -H "Authorization: Bearer ${LOCAL_API_TOKEN}"
 
-curl http://127.0.0.1:8000/api/v1/documents/<document-id>/pages \
+curl 'http://127.0.0.1:8000/api/v1/documents/<document-id>/content?ordinal=1' \
   -H "Authorization: Bearer ${LOCAL_API_TOKEN}"
 ```
 
-失败资料可用 `POST /api/v1/documents/{id}:retry` 并携带稳定的 `Idempotency-Key` 重试；删除使用 `DELETE /api/v1/documents/{id}`。当前只支持具有可提取文字的 PDF，扫描版会返回 `PDF_TEXT_NOT_FOUND` 并提示后续需要 OCR。
+失败资料可用 `POST /api/v1/documents/{id}:retry` 并携带稳定的 `Idempotency-Key` 重试；删除使用 `DELETE /api/v1/documents/{id}`。PDF 需包含可提取文字，扫描版会返回 `PDF_TEXT_NOT_FOUND` 并提示后续需要 OCR。DOCX 按标题层级分段，PPTX 按幻灯片分段并读取演讲者备注；图片中的文字暂不执行 OCR。
 
 可用一份本地 PDF 运行完整验收；脚本不会把资料加入 Git，成功解析的样例会保留在本机资料库：
 
@@ -148,4 +150,7 @@ pnpm --dir web install --frozen-lockfile
 LOCAL_API_TOKEN=<本地令牌> pnpm --dir web dev
 pnpm --dir web typecheck
 pnpm --dir web test
+pnpm --dir web build
 ```
+
+CI 对后端执行 Ruff、Mypy 与 Pytest，对前端执行 TypeScript、Vitest 与生产构建，并用 Docker Compose 验证迁移、最小权限、私有存储和文档上传—解析—删除闭环。

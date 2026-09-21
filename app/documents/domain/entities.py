@@ -24,6 +24,12 @@ class JobStatus(StrEnum):
     CANCELLED = "cancelled"
 
 
+class CitationLocatorKind(StrEnum):
+    PAGE = "page"
+    HEADING = "heading"
+    SLIDE = "slide"
+
+
 @dataclass(frozen=True, slots=True)
 class Document:
     public_id: UUID
@@ -53,14 +59,29 @@ class DocumentListPage:
 
 
 @dataclass(frozen=True, slots=True)
-class DocumentPage:
-    page_number: int
+class CitationLocator:
+    kind: CitationLocatorKind
+    position: int
+    title: str | None = None
+    path: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class DocumentContent:
+    ordinal: int
     content: str
+    locator: CitationLocator
+
+
+@dataclass(frozen=True, slots=True)
+class DocumentContentLocation:
+    ordinal: int
+    locator: CitationLocator
 
 
 @dataclass(frozen=True, slots=True)
 class ParsedDocument:
-    pages: tuple[DocumentPage, ...]
+    contents: tuple[DocumentContent, ...]
     parser_name: str
     parser_version: str
 
@@ -73,6 +94,7 @@ class ClaimedJob:
     document_id: int
     document_public_id: UUID
     object_key: str
+    media_type: str
     source_sha256: str
 
 

@@ -42,3 +42,17 @@ async def test_document_endpoint_requires_bearer_token(client: httpx.AsyncClient
     assert response.status_code == 401
     assert response.json()["error"]["code"] == "AUTHENTICATION_REQUIRED"
     assert response.headers["www-authenticate"] == "Bearer"
+
+
+@pytest.mark.anyio
+async def test_document_upload_rejects_oversized_request_before_form_parsing(
+    client: httpx.AsyncClient,
+) -> None:
+    response = await client.post(
+        "/api/v1/documents",
+        content=b"too large",
+        headers={"Content-Length": str(27 * 1024 * 1024)},
+    )
+
+    assert response.status_code == 413
+    assert response.json()["error"]["code"] == "REQUEST_BODY_TOO_LARGE"

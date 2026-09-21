@@ -17,9 +17,11 @@ async def test_text_pdf_preserves_page_number_and_content(tmp_path: Path) -> Non
 
     parsed = await PypdfDocumentParser(timeout_seconds=5, max_pages=10).parse(pdf_path)
 
-    assert len(parsed.pages) == 1
-    assert parsed.pages[0].page_number == 1
-    assert parsed.pages[0].content == "Important learning result"
+    assert len(parsed.contents) == 1
+    assert parsed.contents[0].ordinal == 1
+    assert parsed.contents[0].locator.kind == "page"
+    assert parsed.contents[0].locator.position == 1
+    assert parsed.contents[0].content == "Important learning result"
 
 
 @pytest.mark.anyio

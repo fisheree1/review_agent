@@ -1,9 +1,10 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { ApiError, uploadDocument } from "../api/documents";
 import { Icon } from "./Icon";
 
 const MAX_FILE_SIZE = 25 * 1024 * 1024;
+const SUPPORTED_EXTENSIONS = [".pdf", ".docx", ".pptx"];
 
 interface UploadPanelProps {
   onUploaded: (documentId: string) => void;
@@ -11,18 +12,20 @@ interface UploadPanelProps {
 
 export function UploadPanel({ onUploaded }: UploadPanelProps) {
   const inputRef = useRef<HTMLInputElement>(null);
+  const uploadControllerRef = useRef<AbortController | null>(null);
   const [file, setFile] = useState<File | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [progress, setProgress] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   function chooseFile(nextFile: File | undefined) {
+    if (uploadControllerRef.current) return;
     setError(null);
     setProgress(null);
     if (!nextFile) return;
-    if (nextFile.type !== "application/pdf" && !nextFile.name.toLowerCase().endsWith(".pdf")) {
+    if (!SUPPORTED_EXTENSIONS.some((extension) => nextFile.name.toLowerCase().endsWith(extension))) {
       setFile(null);
-      setError("目前仅支持 PDF 文件。请选择扩展名为 .pdf 的资料。");
+      setError("目前支持 PDF、DOCX 和 PPTX 文件。");
       return;
     }
     if (nextFile.size > MAX_FILE_SIZE) {
@@ -37,14 +40,20 @@ export function UploadPanel({ onUploaded }: UploadPanelProps) {
     if (!file || progress !== null) return;
     setError(null);
     setProgress(0);
+    const controller = new AbortController();
+    uploadControllerRef.current = controller;
     try {
-      const document = await uploadDocument(file, setProgress);
+      const document = await uploadDocument(file, setProgress, controller.signal);
       onUploaded(document.id);
     } catch (caught) {
       setProgress(null);
       setError(caught instanceof ApiError ? caught.message : "上传失败，请稍后重试。");
+    } finally {
+      uploadControllerRef.current = null;
     }
   }
+
+  useEffect(() => () => uploadControllerRef.current?.abort(), []);
 
   const isUploading = progress !== null;
   return (
@@ -52,7 +61,7 @@ export function UploadPanel({ onUploaded }: UploadPanelProps) {
       <div className="upload-panel__copy">
         <span className="eyebrow">建立你的资料库</span>
         <h1 id="upload-title">把学习资料放进来，安静地读完它。</h1>
-        <p>上传文本型 PDF。系统会在后台保留页码、提取正文，并把处理状态清楚地告诉你。</p>
+        <p>上传 PDF、DOCX 或 PPTX。系统会在后台提取正文，并保留页码、标题或幻灯片位置。</p>
       </div>
       <div
         className={`drop-zone${isDragging ? " drop-zone--active" : ""}`}
@@ -62,6 +71,7 @@ export function UploadPanel({ onUploaded }: UploadPanelProps) {
         onDrop={(event) => {
           event.preventDefault();
           setIsDragging(false);
+          if (isUploading) return;
           chooseFile(event.dataTransfer.files[0]);
         }}
       >
@@ -73,23 +83,34 @@ export function UploadPanel({ onUploaded }: UploadPanelProps) {
           </div>
         ) : (
           <div>
-            <strong>拖放 PDF 到这里</strong>
+            <strong>拖放 PDF、DOCX 或 PPTX 到这里</strong>
             <span>或从电脑选择，最大 25 MB</span>
           </div>
         )}
         <input
-          accept="application/pdf,.pdf"
+          accept="application/pdf,.pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,.docx,application/vnd.openxmlformats-officedocument.presentationml.presentation,.pptx"
           className="visually-hidden"
           id="document-file"
+          disabled={isUploading}
           onChange={(event) => chooseFile(event.target.files?.[0])}
           ref={inputRef}
           type="file"
         />
         <div className="drop-zone__actions">
-          <label className="button button--secondary" htmlFor="document-file">选择文件</label>
+          <button
+            className="button button--secondary"
+            disabled={isUploading}
+            onClick={() => inputRef.current?.click()}
+            type="button"
+          >选择文件</button>
           {file ? (
             <button className="button button--primary" disabled={isUploading} onClick={() => void startUpload()} type="button">
               {isUploading ? "上传中…" : "开始上传"}
+            </button>
+          ) : null}
+          {isUploading ? (
+            <button className="button button--danger-quiet" onClick={() => uploadControllerRef.current?.abort()} type="button">
+              取消上传
             </button>
           ) : null}
         </div>

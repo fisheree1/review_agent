@@ -10,9 +10,10 @@ from app.documents.domain.entities import (
     ClaimedJob,
     DeleteTarget,
     Document,
+    DocumentContent,
+    DocumentContentLocation,
     DocumentListPage,
     DocumentListPosition,
-    DocumentPage,
     ParsedDocument,
 )
 
@@ -33,7 +34,7 @@ class DocumentStorage(Protocol):
 
 
 class DocumentParser(Protocol):
-    async def parse(self, source_path: Path) -> ParsedDocument: ...
+    async def parse(self, source_path: Path, *, media_type: str) -> ParsedDocument: ...
 
 
 class DocumentRepository(Protocol):
@@ -88,9 +89,21 @@ class DocumentRepository(Protocol):
         after: DocumentListPosition | None,
     ) -> DocumentListPage: ...
 
-    async def list_pages(
-        self, *, workspace_public_id: UUID, document_public_id: UUID
-    ) -> tuple[DocumentPage, ...]: ...
+    async def list_content(
+        self,
+        *,
+        workspace_public_id: UUID,
+        document_public_id: UUID,
+        start_ordinal: int,
+        limit: int,
+    ) -> tuple[DocumentContent, ...]: ...
+
+    async def list_content_locations(
+        self,
+        *,
+        workspace_public_id: UUID,
+        document_public_id: UUID,
+    ) -> tuple[DocumentContentLocation, ...]: ...
 
     async def queue_retry(
         self,

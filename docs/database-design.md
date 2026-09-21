@@ -2,7 +2,7 @@
 
 版本：0.1
 数据库：PostgreSQL 17 + pgvector
-状态：Alembic 与最小权限角色已接入；`0002_document_ingestion` 固化第一份文本型 PDF 闭环，`0003_document_list_index` 支持资料库游标读取，RAG、认证成员关系与 Quiz 表仍待对应阶段迁移。
+状态：Alembic 与最小权限角色已接入；`0002_document_ingestion` 固化资料摄取闭环，`0003_document_list_index` 支持资料库游标读取，`0004_document_tenant_integrity` 强制内容与版本的 workspace 一致性，`0005_worker_heartbeat` 提供 Worker 就绪状态，`0006_document_version_owner` 约束版本归属，`0007_unified_citation_locator` 增量加入 PDF/DOCX/PPTX 统一来源定位。RAG、认证成员关系与 Quiz 表仍待对应阶段迁移。
 
 ## 1. 设计目标
 
@@ -18,7 +18,7 @@
 | --- | --- | --- |
 | 用户、空间、文档元数据 | PostgreSQL | 权限与业务事实 |
 | 原始 PDF/DOCX/PPTX | 对象存储 | 私有 bucket，数据库保存对象键和哈希 |
-| 当前按页正文 | PostgreSQL `document_pages` | 保留页码与可读正文；后续 chunk 引用此版本 |
+| 当前有序正文 | PostgreSQL `document_pages` | 兼容表名；保存页、标题段或幻灯片及统一 locator |
 | 文本分块与来源定位 | PostgreSQL | RAG 的可追溯最小单元 |
 | Embedding | pgvector | 派生数据，带模型与索引版本 |
 | 对话、Quiz、作答 | PostgreSQL | 业务记录与学习历史 |
@@ -108,7 +108,7 @@ erDiagram
 | status | text | 文档状态机 |
 | active_version_id | bigint | 当前可检索版本，可空 |
 | failure_code | text | 稳定错误码，不保存敏感堆栈 |
-| page_count | integer | 可空，解析后写入 |
+| page_count | integer | 兼容字段；表示当前版本内容单元数，新接口暴露为 `content_count` |
 | language_code | text | 可空，BCP 47 风格代码 |
 | created_by | bigint | 上传用户 |
 | created_at / updated_at / deleted_at | timestamptz | 生命周期 |
@@ -117,13 +117,13 @@ erDiagram
 
 #### `document_versions`
 
-当前保存 `document_id`、`version_no`、来源哈希、解析器名称/版本、状态、页数和时间。唯一键 `(document_id, version_no)` 以及 `(document_id, source_sha256, parser_name, parser_version)` 防止任务重放重复创建版本。
+当前保存 `document_id`、`workspace_id`、`version_no`、来源哈希、解析器名称/版本、状态、内容单元数和时间。唯一键 `(document_id, version_no)` 以及 `(document_id, source_sha256, parser_name, parser_version)` 防止任务重放重复创建版本；复合外键保证 active version 属于对应 document。
 
 新索引完成前不改 `documents.active_version_id`。切换和版本状态更新在同一事务完成。
 
 #### `document_pages`
 
-保存 `document_version_id`、反规范化的 `workspace_id`、从 1 开始的 `page_number`、正文和字符数。`(document_version_id, page_number)` 唯一；读取必须同时经过 workspace、document 和 active version 过滤。
+该表名与 `page_number` 是 PDF 阶段留下的兼容命名，应用层把 `page_number` 解释为从 1 开始的内容单元 `ordinal`。每行还保存 `locator_kind`（page / heading / slide）、`locator_position`、可选 `locator_title` 和 JSON 标题路径 `locator_path`。旧 PDF 行由迁移回填为 page locator。`(document_version_id, page_number)` 唯一；复合外键保证内容与版本属于同一 workspace，读取仍必须同时经过 workspace、document 和 active version 过滤。
 
 #### `document_chunks`
 
@@ -134,7 +134,7 @@ erDiagram
 | ordinal | integer | 版本内稳定顺序 |
 | content | text | 清洗后的检索正文 |
 | token_count | integer | 上下文预算 |
-| source_type | text | page / section / slide |
+| source_type | text | page / heading / slide，与 citation locator 一致 |
 | source_start / source_end | integer | 页码或幻灯片范围 |
 | heading_path | text[] | 章节路径 |
 | metadata | jsonb | 低频、非核心的解析元数据 |
@@ -156,6 +156,10 @@ Embedding 维度不能模糊配置后直接上线。首个模型确定后固定 
 包含 `public_id`、`workspace_id`、`document_id`、`job_type`、`idempotency_key`、`status`、`attempt_count`、`max_attempts`、`available_at`、`lease_expires_at`、`failure_code`、`failure_message`、`retry_of_job_id` 和时间字段。
 
 唯一键 `(workspace_id, job_type, idempotency_key)`。不要把完整异常、模型正文或文件内容塞入 `failure_detail`；详细诊断进入受控日志系统。
+
+#### `worker_heartbeats`
+
+保存 `worker_id`、`worker_type`、`started_at` 和 `last_seen_at`。Worker 以固定间隔 upsert；API 只按类型读取最新心跳并结合过期阈值返回就绪状态。该表仅用于可用性判断，不替代任务状态或审计记录。
 
 #### `outbox_events`
 

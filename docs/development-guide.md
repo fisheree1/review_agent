@@ -173,10 +173,10 @@ docker compose ps
 
 `database-init` 是可重复执行的一次性容器，先以管理员账号幂等配置角色与 schema，再以迁移账号运行 Alembic。API 只接收运行账号凭据。手动执行迁移使用 `docker compose run --rm database-init`，不要从 API 启动流程调用 `create_all()`。当前 `0001_database_baseline` 只建立 Alembic 版本基线，不创建尚未定稿的业务表。
 
-`0002_document_ingestion` 创建当前资料闭环所需的 `workspaces`、`documents`、`document_versions`、`document_pages` 和 `processing_jobs`，不提前创建 RAG、对话或 Quiz 表。`0003_document_list_index` 只增加资料库游标查询索引。每次改模型后运行 `docker compose run --rm database-init alembic check`，并从空库与上一 revision 验证升级。
+`0002_document_ingestion` 创建当前资料闭环所需的 `workspaces`、`documents`、`document_versions`、`document_pages` 和 `processing_jobs`，不提前创建 RAG、对话或 Quiz 表。`0003_document_list_index` 增加资料库游标查询索引；`0004_document_tenant_integrity` 和 `0006_document_version_owner` 把内容、版本、文档的租户归属落实为数据库约束；`0005_worker_heartbeat` 增加后台 Worker 心跳；`0007_unified_citation_locator` 为已有 PDF 数据回填页码 locator，并增量支持 DOCX 标题与 PPTX 幻灯片定位。每次改模型后运行 `docker compose run --rm database-init alembic check`，并从空库与上一 revision 验证升级。
 
-当前 Worker 直接领取 PostgreSQL 中的持久任务，使用短事务、租约、尝试上限和幂等键。PDF 解析在子进程执行，API 不解析正文。引入 Redis/Celery 前先依据 [ADR-0001](./adr/0001-postgresql-document-jobs.md) 的迁移门槛评审，不能形成第二份任务状态。
+当前 Worker 直接领取 PostgreSQL 中的持久任务，使用短事务、租约、尝试上限和幂等键。PDF 与 OOXML 解析在禁止网络的子进程执行，API 只做流式上传与结构校验，不解析正文。引入 Redis/Celery 前先依据 [ADR-0001](./adr/0001-postgresql-document-jobs.md) 的迁移门槛评审，不能形成第二份任务状态。
 
-当前健康检查：`/health/live` 验证进程存活，`/health/ready` 验证数据库和 pgvector 可用。就绪检查只验证当前进程的硬依赖，外部模型故障通过降级和指标展示，不应让整个 API 不健康。
+当前健康检查：`/health/live` 验证 API 进程存活，`/health/ready` 验证数据库和 pgvector 可用，`/health/worker` 验证文档 Worker 最近心跳。API 就绪与 Worker 就绪分开，避免后台处理故障把只读 API 误判为不可用；外部模型故障通过降级和指标展示，不应让整个 API 不健康。
 
-React 前端位于 `web/`。服务端状态由 TanStack Query 管理，当前资料与页码进入 URL，主题、字号和行宽只保存在本地。开发与预览代理从 Node 进程环境读取 `LOCAL_API_TOKEN` 并为 `/api` 请求附加认证头；禁止使用 `VITE_` 前缀暴露令牌。组件测试使用 Vitest/Testing Library，真实上传阅读旅程使用 Playwright，并通过 `E2E_PDF_PATH` 指向本地文本型 PDF。
+React 前端位于 `web/`。服务端状态由 TanStack Query 管理，当前资料与内容单元序号进入 URL，正文按当前单元读取，界面根据 citation locator 显示页码、标题路径或幻灯片；主题、字号和行宽只保存在本地。开发与预览代理从 Node 进程环境读取 `LOCAL_API_TOKEN` 并为 `/api` 请求附加认证头；禁止使用 `VITE_` 前缀暴露令牌。组件测试使用 Vitest/Testing Library，真实上传阅读旅程使用 Playwright。CI 同时执行前端类型检查、组件测试和生产构建，不能只验证后端。

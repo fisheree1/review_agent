@@ -10,6 +10,8 @@ on:
       - "pyproject.toml"
       - "alembic.ini"
       - "uv.lock"
+      - "web/**"
+      - "Dockerfile.web"
       - ".github/workflows/ci.yml"
   push:
     branches: [main]
@@ -21,6 +23,8 @@ on:
       - "pyproject.toml"
       - "alembic.ini"
       - "uv.lock"
+      - "web/**"
+      - "Dockerfile.web"
       - ".github/workflows/ci.yml"
   workflow_dispatch:
 
@@ -62,3 +66,27 @@ jobs:
 
       - name: Test important behavior
         run: uv run pytest -q
+
+  web-quality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Enable locked pnpm version
+        run: corepack enable
+
+      - name: Install locked web dependencies
+        run: pnpm --dir web install --frozen-lockfile
+
+      - name: Type-check web application
+        run: pnpm --dir web typecheck
+
+      - name: Test accessible reader behavior
+        run: pnpm --dir web test
+
+      - name: Build web application
+        env:
+          LOCAL_API_TOKEN: ci-placeholder
+        run: pnpm --dir web build

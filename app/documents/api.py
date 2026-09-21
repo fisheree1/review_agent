@@ -14,6 +14,9 @@ from app.documents.application.service import DocumentService
 from app.documents.infrastructure.repository import SqlAlchemyDocumentsUnitOfWork
 from app.documents.infrastructure.storage import MinioDocumentStorage
 from app.documents.schemas import (
+    ContentLocationResponse,
+    ContentResponse,
+    DocumentContentResponse,
     DocumentListResponse,
     DocumentPagesResponse,
     DocumentResponse,
@@ -69,7 +72,7 @@ async def list_documents(
 async def upload_document(
     principal: Annotated[Principal, Depends(get_current_principal)],
     service: Annotated[DocumentService, Depends(get_document_service)],
-    file: Annotated[UploadFile, File(description="Text-based PDF")],
+    file: Annotated[UploadFile, File(description="PDF, DOCX, or PPTX learning material")],
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
 ) -> UploadResponse:
     result = await service.upload(
@@ -101,15 +104,40 @@ async def get_document_pages(
     document_id: UUID,
     principal: Annotated[Principal, Depends(get_current_principal)],
     service: Annotated[DocumentService, Depends(get_document_service)],
+    page: Annotated[int, Query(ge=1)] = 1,
 ) -> DocumentPagesResponse:
-    pages = await service.pages(
+    result = await service.content(
         workspace_public_id=principal.workspace_public_id,
         document_public_id=document_id,
+        ordinal=page,
     )
     return DocumentPagesResponse(
         document_id=document_id,
-        page_count=len(pages),
-        pages=[PageResponse.from_entity(page) for page in pages],
+        page_count=result.content_count,
+        pages=[
+            PageResponse(page_number=content.ordinal, content=content.content)
+            for content in result.contents
+        ],
+    )
+
+
+@router.get("/{document_id}/content", response_model=DocumentContentResponse)
+async def get_document_content(
+    document_id: UUID,
+    principal: Annotated[Principal, Depends(get_current_principal)],
+    service: Annotated[DocumentService, Depends(get_document_service)],
+    ordinal: Annotated[int, Query(ge=1)] = 1,
+) -> DocumentContentResponse:
+    result = await service.content(
+        workspace_public_id=principal.workspace_public_id,
+        document_public_id=document_id,
+        ordinal=ordinal,
+    )
+    return DocumentContentResponse(
+        document_id=document_id,
+        content_count=result.content_count,
+        contents=[ContentResponse.from_entity(content) for content in result.contents],
+        locations=[ContentLocationResponse.from_entity(location) for location in result.locations],
     )
 
 

@@ -13,15 +13,31 @@ export interface DocumentSummary {
   byte_size: number;
   status: DocumentStatus;
   page_count: number | null;
+  content_count: number | null;
   failure_code: string | null;
   failure_message: string | null;
   created_at: string;
   updated_at: string;
 }
 
-export interface DocumentPage {
-  page_number: number;
+export type CitationLocatorKind = "page" | "heading" | "slide";
+
+export interface CitationLocator {
+  kind: CitationLocatorKind;
+  position: number;
+  title: string | null;
+  path: string[];
+}
+
+export interface DocumentContent {
+  ordinal: number;
   content: string;
+  citation_locator: CitationLocator;
+}
+
+export interface DocumentContentLocation {
+  ordinal: number;
+  citation_locator: CitationLocator;
 }
 
 export interface DocumentListResponse {
@@ -29,10 +45,11 @@ export interface DocumentListResponse {
   next_cursor: string | null;
 }
 
-export interface DocumentPagesResponse {
+export interface DocumentContentResponse {
   document_id: string;
-  page_count: number;
-  pages: DocumentPage[];
+  content_count: number;
+  contents: DocumentContent[];
+  locations: DocumentContentLocation[];
 }
 
 interface ErrorEnvelope {
@@ -85,11 +102,15 @@ export async function getDocument(documentId: string): Promise<DocumentSummary> 
   return parseResponse<DocumentSummary>(response);
 }
 
-export async function getDocumentPages(documentId: string): Promise<DocumentPagesResponse> {
-  const response = await fetch(`/api/v1/documents/${documentId}/pages`, {
+export async function getDocumentContent(
+  documentId: string,
+  ordinal: number,
+): Promise<DocumentContentResponse> {
+  const query = new URLSearchParams({ ordinal: String(ordinal) });
+  const response = await fetch(`/api/v1/documents/${documentId}/content?${query}`, {
     headers: { Accept: "application/json" },
   });
-  return parseResponse<DocumentPagesResponse>(response);
+  return parseResponse<DocumentContentResponse>(response);
 }
 
 export async function retryDocument(documentId: string): Promise<DocumentSummary> {
@@ -103,9 +124,15 @@ export async function retryDocument(documentId: string): Promise<DocumentSummary
   return parseResponse<DocumentSummary>(response);
 }
 
+export async function deleteDocument(documentId: string): Promise<void> {
+  const response = await fetch(`/api/v1/documents/${documentId}`, { method: "DELETE" });
+  if (!response.ok) await parseResponse<never>(response);
+}
+
 export function uploadDocument(
   file: File,
   onProgress: (progress: number) => void,
+  signal?: AbortSignal,
 ): Promise<DocumentSummary> {
   return new Promise((resolve, reject) => {
     const request = new XMLHttpRequest();
@@ -135,6 +162,10 @@ export function uploadDocument(
     request.addEventListener("error", () => {
       reject(new ApiError("无法连接服务，请确认本地服务已启动", "NETWORK_ERROR"));
     });
+    request.addEventListener("abort", () => {
+      reject(new ApiError("已停止等待上传结果；如果文件刚好上传完成，请刷新资料列表确认。", "UPLOAD_CANCELLED"));
+    });
+    signal?.addEventListener("abort", () => request.abort(), { once: true });
     const body = new FormData();
     body.append("file", file);
     request.send(body);

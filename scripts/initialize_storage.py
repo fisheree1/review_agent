@@ -3,7 +3,7 @@ from __future__ import annotations
 import time
 
 from minio import Minio, MinioAdmin
-from minio.credentials import StaticProvider
+from minio.credentials.providers import StaticProvider
 from minio.error import S3Error
 
 from app.core.config import StorageAdminSettings

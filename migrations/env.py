@@ -12,6 +12,7 @@ from app.core.config import MigrationSettings
 from app.core.database_schema import APPLICATION_SCHEMA, MIGRATION_SCHEMA
 from app.core.models import Base
 from app.documents.infrastructure import models as document_models
+from app.jobs import models as job_models
 
 config = context.config
 if config.config_file_name is not None:
@@ -19,6 +20,7 @@ if config.config_file_name is not None:
 
 target_metadata = Base.metadata
 assert document_models.WorkspaceModel.__table__.schema == APPLICATION_SCHEMA
+assert job_models.WorkerHeartbeatModel.__table__.schema == APPLICATION_SCHEMA
 
 
 def _migration_settings() -> MigrationSettings:

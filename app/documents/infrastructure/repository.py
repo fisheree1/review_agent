@@ -11,12 +11,15 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.documents.application.ports import DocumentRepository, DuplicateDocumentError
 from app.documents.domain.entities import (
+    CitationLocator,
+    CitationLocatorKind,
     ClaimedJob,
     DeleteTarget,
     Document,
+    DocumentContent,
+    DocumentContentLocation,
     DocumentListPage,
     DocumentListPosition,
-    DocumentPage,
     DocumentStatus,
     JobStatus,
     ParsedDocument,
@@ -163,7 +166,7 @@ class SqlAlchemyDocumentRepository(DocumentRepository):
         existing_job = await self._session.scalar(
             select(ProcessingJobModel.id).where(
                 ProcessingJobModel.workspace_id == workspace_id,
-                ProcessingJobModel.job_type == "pdf_parse",
+                ProcessingJobModel.job_type == "document_parse",
                 ProcessingJobModel.idempotency_key == idempotency_key,
             )
         )
@@ -173,11 +176,15 @@ class SqlAlchemyDocumentRepository(DocumentRepository):
                     public_id=job_public_id,
                     workspace_id=workspace_id,
                     document_id=document.id,
+                    job_type="document_parse",
                     idempotency_key=idempotency_key,
                     status=JobStatus.QUEUED.value,
                 )
             )
-        if document.status == DocumentStatus.UPLOADED.value:
+        if document.status in {
+            DocumentStatus.UPLOADED.value,
+            DocumentStatus.FAILED.value,
+        }:
             document.status = DocumentStatus.QUEUED.value
             document.failure_code = None
             document.failure_message = None
@@ -266,12 +273,70 @@ class SqlAlchemyDocumentRepository(DocumentRepository):
             next_position=next_position,
         )
 
-    async def list_pages(
-        self, *, workspace_public_id: UUID, document_public_id: UUID
-    ) -> tuple[DocumentPage, ...]:
+    async def list_content(
+        self,
+        *,
+        workspace_public_id: UUID,
+        document_public_id: UUID,
+        start_ordinal: int,
+        limit: int,
+    ) -> tuple[DocumentContent, ...]:
         rows = (
             await self._session.execute(
-                select(DocumentPageModel.page_number, DocumentPageModel.content)
+                select(
+                    DocumentPageModel.page_number,
+                    DocumentPageModel.content,
+                    DocumentPageModel.locator_kind,
+                    DocumentPageModel.locator_position,
+                    DocumentPageModel.locator_title,
+                    DocumentPageModel.locator_path,
+                )
+                .join(
+                    DocumentVersionModel,
+                    DocumentVersionModel.id == DocumentPageModel.document_version_id,
+                )
+                .join(DocumentModel, DocumentModel.active_version_id == DocumentVersionModel.id)
+                .join(WorkspaceModel, WorkspaceModel.id == DocumentModel.workspace_id)
+                .where(
+                    WorkspaceModel.public_id == workspace_public_id,
+                    DocumentModel.public_id == document_public_id,
+                    DocumentModel.status == DocumentStatus.READY.value,
+                    DocumentPageModel.workspace_id == WorkspaceModel.id,
+                    DocumentPageModel.page_number >= start_ordinal,
+                )
+                .order_by(DocumentPageModel.page_number)
+                .limit(limit)
+            )
+        ).all()
+        return tuple(
+            DocumentContent(
+                ordinal=row[0],
+                content=row[1],
+                locator=CitationLocator(
+                    kind=CitationLocatorKind(row[2]),
+                    position=row[3],
+                    title=row[4],
+                    path=tuple(row[5]),
+                ),
+            )
+            for row in rows
+        )
+
+    async def list_content_locations(
+        self,
+        *,
+        workspace_public_id: UUID,
+        document_public_id: UUID,
+    ) -> tuple[DocumentContentLocation, ...]:
+        rows = (
+            await self._session.execute(
+                select(
+                    DocumentPageModel.page_number,
+                    DocumentPageModel.locator_kind,
+                    DocumentPageModel.locator_position,
+                    DocumentPageModel.locator_title,
+                    DocumentPageModel.locator_path,
+                )
                 .join(
                     DocumentVersionModel,
                     DocumentVersionModel.id == DocumentPageModel.document_version_id,
@@ -287,7 +352,18 @@ class SqlAlchemyDocumentRepository(DocumentRepository):
                 .order_by(DocumentPageModel.page_number)
             )
         ).all()
-        return tuple(DocumentPage(page_number=row[0], content=row[1]) for row in rows)
+        return tuple(
+            DocumentContentLocation(
+                ordinal=row[0],
+                locator=CitationLocator(
+                    kind=CitationLocatorKind(row[1]),
+                    position=row[2],
+                    title=row[3],
+                    path=tuple(row[4]),
+                ),
+            )
+            for row in rows
+        )
 
     async def queue_retry(
         self,
@@ -308,7 +384,7 @@ class SqlAlchemyDocumentRepository(DocumentRepository):
         existing_job = await self._session.scalar(
             select(ProcessingJobModel).where(
                 ProcessingJobModel.workspace_id == workspace_id,
-                ProcessingJobModel.job_type == "pdf_parse",
+                ProcessingJobModel.job_type == "document_parse",
                 ProcessingJobModel.idempotency_key == idempotency_key,
             )
         )
@@ -326,6 +402,7 @@ class SqlAlchemyDocumentRepository(DocumentRepository):
                     public_id=job_public_id,
                     workspace_id=workspace_id,
                     document_id=document.id,
+                    job_type="document_parse",
                     idempotency_key=idempotency_key,
                     status=JobStatus.QUEUED.value,
                     retry_of_job_id=previous_job_id,
@@ -470,6 +547,7 @@ class SqlAlchemyDocumentRepository(DocumentRepository):
             document_id=document.id,
             document_public_id=document.public_id,
             object_key=document.object_key,
+            media_type=document.media_type,
             source_sha256=document.sha256,
         )
 
@@ -502,12 +580,13 @@ class SqlAlchemyDocumentRepository(DocumentRepository):
             )
             version = DocumentVersionModel(
                 document_id=document.id,
+                workspace_id=job.workspace_id,
                 version_no=int(latest_version or 0) + 1,
                 source_sha256=job.source_sha256,
                 parser_name=parsed.parser_name,
                 parser_version=parsed.parser_version,
                 status="ready",
-                page_count=len(parsed.pages),
+                page_count=len(parsed.contents),
             )
             self._session.add(version)
             await self._session.flush()
@@ -515,11 +594,15 @@ class SqlAlchemyDocumentRepository(DocumentRepository):
                 DocumentPageModel(
                     document_version_id=version.id,
                     workspace_id=job.workspace_id,
-                    page_number=page.page_number,
-                    content=page.content,
-                    char_count=len(page.content),
+                    page_number=content.ordinal,
+                    content=content.content,
+                    char_count=len(content.content),
+                    locator_kind=content.locator.kind.value,
+                    locator_position=content.locator.position,
+                    locator_title=content.locator.title,
+                    locator_path=list(content.locator.path),
                 )
-                for page in parsed.pages
+                for content in parsed.contents
             )
 
         document.active_version_id = version.id

@@ -9,6 +9,11 @@ import pypdf
 from pypdf import PdfReader
 
 
+def _deny_network_access(event: str, _: tuple[object, ...]) -> None:
+    if event.startswith("socket."):
+        raise PermissionError("PDF parser subprocess cannot access the network")
+
+
 def _normalized_text(value: str) -> str:
     return "\n".join(line.rstrip() for line in value.replace("\x00", "").splitlines()).strip()
 
@@ -25,7 +30,7 @@ def extract_pdf(source_path: Path, *, max_pages: int, max_characters: int) -> di
             }
         }
 
-    pages: list[dict[str, object]] = []
+    contents: list[dict[str, object]] = []
     extracted_characters = 0
     for page_number, page in enumerate(reader.pages, start=1):
         content = _normalized_text(page.extract_text() or "")
@@ -37,7 +42,18 @@ def extract_pdf(source_path: Path, *, max_pages: int, max_characters: int) -> di
                     "message": "PDF 可提取文字量超过处理上限",
                 }
             }
-        pages.append({"page_number": page_number, "content": content})
+        contents.append(
+            {
+                "ordinal": page_number,
+                "content": content,
+                "locator": {
+                    "kind": "page",
+                    "position": page_number,
+                    "title": None,
+                    "path": [],
+                },
+            }
+        )
 
     if extracted_characters == 0:
         return {
@@ -49,13 +65,14 @@ def extract_pdf(source_path: Path, *, max_pages: int, max_characters: int) -> di
     return {
         "parser_name": "pypdf",
         "parser_version": pypdf.__version__,
-        "pages": pages,
+        "contents": contents,
     }
 
 
 def main() -> None:
     if len(sys.argv) != 5:
         raise SystemExit(2)
+    sys.addaudithook(_deny_network_access)
     source_path = Path(sys.argv[1])
     output_path = Path(sys.argv[2])
     max_pages = int(sys.argv[3])
