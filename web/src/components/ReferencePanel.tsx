@@ -2,10 +2,12 @@ import { useCallback, useEffect, useRef } from "react";
 
 import { type DocumentContent, type DocumentContentLocation } from "../api/documents";
 import { citationLabel } from "../citations";
+import { type Citation } from "../api/rag";
 import { useFocusTrap } from "../hooks/useFocusTrap";
 import { Icon } from "./Icon";
 
 interface ReferencePanelProps {
+  answerCitation?: Citation | null;
   currentOrdinal: number;
   isOpen: boolean;
   contentCount: number;
@@ -21,6 +23,7 @@ function excerpt(content: string): string {
 }
 
 export function ReferencePanel({
+  answerCitation,
   currentOrdinal,
   isOpen,
   contentCount,
@@ -48,6 +51,11 @@ export function ReferencePanel({
         <div><span className="eyebrow">Citation locator</span><h2>来源定位</h2></div>
         <button aria-label="关闭引用面板" className="icon-button reference-panel__close" onClick={onClose} type="button"><Icon name="close" /></button>
       </div>
+      {answerCitation ? <section className="citation-preview" aria-label="回答引用原文">
+        <h3>{citationLabel(answerCitation.locator)}</h3>
+        <blockquote>{answerCitation.quote}</blockquote>
+        <button className="button button--secondary" onClick={() => onSelect(answerCitation.unit)} type="button">在原文中打开</button>
+      </section> : null}
       <p className="reference-panel__intro">
         {current ? `${citationLabel(current.citation_locator)}：${excerpt(current.content)}` : "选择一个来源位置查看正文。"}
       </p>

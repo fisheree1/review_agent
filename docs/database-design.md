@@ -2,7 +2,15 @@
 
 版本：0.1
 数据库：PostgreSQL 17 + pgvector
-状态：Alembic 与最小权限角色已接入；`0002_document_ingestion` 固化资料摄取闭环，`0003_document_list_index` 支持资料库游标读取，`0004_document_tenant_integrity` 强制内容与版本的 workspace 一致性，`0005_worker_heartbeat` 提供 Worker 就绪状态，`0006_document_version_owner` 约束版本归属，`0007_unified_citation_locator` 增量加入 PDF/DOCX/PPTX 统一来源定位。RAG、认证成员关系与 Quiz 表仍待对应阶段迁移。
+状态：`0001`–`0007` 已建立最小权限、资料摄取与统一引用定位；`0008_cited_rag` 增加版本化索引、1024 维分块和单资料问答任务。认证成员关系、多轮对话与 Quiz 表仍待对应阶段迁移。
+
+## 当前 RAG 实现与目标设计的差异
+
+以下实体章节保留长期目标。当前 `0008` 只增加 `document_indexes`、`document_chunks`、`rag_questions` 三张表：索引由 `(document_version_id, profile)` 唯一标识，分块由 `(index_id, ordinal)` 唯一标识；复合外键从分块经索引绑定到同一 workspace 的不可变解析版本。来源单元与字符起止保存在分块中，locator 通过固定版本的 `document_pages` 读取。向量固定 `vector(1024)`。
+
+`rag_questions` 是独立提问任务与结果，不冒充连续对话；绑定 workspace 和解析版本，按空间强制请求幂等。回答 JSON 仅保存已验证的逐条 claim、原文摘录和来源位置，usage 保存模型、策略版本与生成 Token。版本被删除时三张表级联清理，不保留悬空原文副本。
+
+当前数据量使用带范围索引的精确向量查询与动态全文排名，尚未创建目标设计中的 HNSW/GIN；需要以召回、查询计划和规模证据决定何时加入。升级、回退和集成检查见 [RAG 文档](./rag-implementation.md)。
 
 ## 1. 设计目标
 

@@ -95,6 +95,8 @@ Pydantic schema 对长度、枚举、数量和嵌套深度设置上限。OpenAPI
 
 ## 7. RAG 与模型开发规范
 
+当前实现、独立数据库集成检查和云端连接检查见 [RAG 实现与验收](./rag-implementation.md)。普通测试使用假模型；`scripts.verify_model_access` 会调用真实服务，单独执行。供应商错误只记录稳定错误码；配置校验隐藏原始输入，避免异常消息泄露密钥。
+
 - Prompt 使用独立模板和版本号，不在 Python 字符串中到处拼接。
 - 模型输入和输出有 schema；解析失败不能静默降级为未经验证的文本。
 - 分块策略、Embedding 模型、检索参数和重排版本全部进入 `index_version`。
@@ -173,7 +175,7 @@ docker compose ps
 
 `database-init` 是可重复执行的一次性容器，先以管理员账号幂等配置角色与 schema，再以迁移账号运行 Alembic。API 只接收运行账号凭据。手动执行迁移使用 `docker compose run --rm database-init`，不要从 API 启动流程调用 `create_all()`。当前 `0001_database_baseline` 只建立 Alembic 版本基线，不创建尚未定稿的业务表。
 
-`0002_document_ingestion` 创建当前资料闭环所需的 `workspaces`、`documents`、`document_versions`、`document_pages` 和 `processing_jobs`，不提前创建 RAG、对话或 Quiz 表。`0003_document_list_index` 增加资料库游标查询索引；`0004_document_tenant_integrity` 和 `0006_document_version_owner` 把内容、版本、文档的租户归属落实为数据库约束；`0005_worker_heartbeat` 增加后台 Worker 心跳；`0007_unified_citation_locator` 为已有 PDF 数据回填页码 locator，并增量支持 DOCX 标题与 PPTX 幻灯片定位。每次改模型后运行 `docker compose run --rm database-init alembic check`，并从空库与上一 revision 验证升级。
+`0002_document_ingestion` 只创建资料闭环所需的 `workspaces`、`documents`、`document_versions`、`document_pages` 和 `processing_jobs`。`0003_document_list_index` 增加资料库游标查询索引；`0004_document_tenant_integrity` 和 `0006_document_version_owner` 把内容、版本、文档的租户归属落实为数据库约束；`0005_worker_heartbeat` 增加后台 Worker 心跳；`0007_unified_citation_locator` 为已有 PDF 数据回填页码 locator，并增量支持 DOCX 标题与 PPTX 幻灯片定位；`0008_cited_rag` 才增加索引、分块和独立问答任务表，仍不预建多轮对话或 Quiz 表。每次改模型后运行 `docker compose run --rm database-init alembic check`，并从空库与上一 revision 验证升级。
 
 当前 Worker 直接领取 PostgreSQL 中的持久任务，使用短事务、租约、尝试上限和幂等键。PDF 与 OOXML 解析在禁止网络的子进程执行，API 只做流式上传与结构校验，不解析正文。引入 Redis/Celery 前先依据 [ADR-0001](./adr/0001-postgresql-document-jobs.md) 的迁移门槛评审，不能形成第二份任务状态。
 

@@ -11,6 +11,8 @@ import {
   retryDocument,
 } from "../api/documents";
 import { citationLabel, contentCountLabel, documentTypeLabel } from "../citations";
+import { type Citation } from "../api/rag";
+import { QuestionPanel } from "../components/QuestionPanel";
 import { AppHeader } from "../components/AppHeader";
 import { DeleteDocumentDialog } from "../components/DeleteDocumentDialog";
 import { ErrorState } from "../components/ErrorState";
@@ -54,6 +56,8 @@ export function ReaderPage() {
   );
   const [isShortcutsOpen, setIsShortcutsOpen] = useState(false);
   const [isDeleteOpen, setIsDeleteOpen] = useState(false);
+  const [isQuestionsOpen, setIsQuestionsOpen] = useState(false);
+  const [answerCitation, setAnswerCitation] = useState<Citation | null>(null);
   const [fontSize, setFontSize] = useState(storedFontSize);
   const [readingWidth, setReadingWidth] = useState<ReadingWidth>(storedReadingWidth);
   const navRef = useRef<HTMLElement>(null);
@@ -88,11 +92,13 @@ export function ReaderPage() {
   const deleteMutation = useMutation({
     mutationFn: () => deleteDocument(documentId),
     onSuccess: async () => {
+      queryClient.removeQueries({ queryKey: ["rag", documentId] });
       await queryClient.invalidateQueries({ queryKey: ["documents"] });
       navigate("/", { replace: true });
     },
   });
   const document = documentQuery.data ?? null;
+  useEffect(() => { setAnswerCitation(null); setIsQuestionsOpen(false); }, [documentId]);
   const contents = contentQuery.data?.contents ?? [];
   const contentCount = document?.content_count ?? contentQuery.data?.content_count ?? 0;
   const error = documentQuery.error ?? contentQuery.error ?? retryMutation.error;
@@ -238,10 +244,12 @@ export function ReaderPage() {
                 <span className="eyebrow">{contentCountLabel(document)} · {documentTypeLabel(document.media_type)}</span>
                 <h1>{document.filename}</h1>
                 <p>正文保留原始来源位置。使用 <kbd>[</kbd> 与 <kbd>]</kbd> 可以前后移动。</p>
+                <button aria-expanded={isQuestionsOpen} className="button button--secondary" onClick={() => setIsQuestionsOpen((value) => !value)} type="button">{isQuestionsOpen ? "收起资料问答" : "基于此资料提问"}</button>
                 <button className="button button--danger-quiet document-reader__delete" onClick={() => setIsDeleteOpen(true)} type="button">
                   删除资料
                 </button>
               </header>
+              {isQuestionsOpen ? <QuestionPanel documentId={documentId} filename={document.filename} key={documentId} onCitation={(citation) => { setAnswerCitation(citation); setIsReferencesOpen(true); }} /> : null}
               <div className="page-stack">
                 {contents.map((content) => (
                   <section
@@ -269,6 +277,7 @@ export function ReaderPage() {
         </main>
 
         <ReferencePanel
+          answerCitation={answerCitation}
           currentOrdinal={currentOrdinal}
           isOpen={isReferencesOpen}
           onClose={closeReferences}

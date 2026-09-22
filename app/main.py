@@ -14,6 +14,7 @@ from app.core.errors import ApplicationError
 from app.core.request_limits import RequestBodyLimitMiddleware
 from app.documents.api import router as documents_router
 from app.jobs.models import WorkerHeartbeatModel
+from app.rag.api import router as rag_router
 
 settings = get_settings()
 
@@ -36,6 +37,10 @@ app.add_middleware(
     max_bytes=settings.max_upload_bytes + 1024 * 1024,
 )
 app.include_router(documents_router)
+app.include_router(rag_router)
+app.add_middleware(
+    RequestBodyLimitMiddleware, path="/api/v1/documents/", max_bytes=16384, prefix=True
+)
 
 
 @app.exception_handler(ApplicationError)

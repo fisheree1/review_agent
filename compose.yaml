@@ -38,6 +38,7 @@ services:
       LOCAL_WORKSPACE_ID: ${LOCAL_WORKSPACE_ID:?Run python3 scripts/init_local_env.py or scripts/upgrade_local_env.py first}
       MAX_UPLOAD_BYTES: ${MAX_UPLOAD_BYTES:-26214400}
       WORKER_HEALTH_STALE_SECONDS: ${WORKER_HEALTH_STALE_SECONDS:-30}
+      VOYAGE_MODEL: ${VOYAGE_MODEL:-voyage-4}
       STORAGE_ENDPOINT: minio:9000
       STORAGE_ACCESS_KEY: ${STORAGE_ACCESS_KEY:?Run python3 scripts/init_local_env.py or scripts/upgrade_local_env.py first}
       STORAGE_SECRET_KEY: ${STORAGE_SECRET_KEY:?Run python3 scripts/init_local_env.py or scripts/upgrade_local_env.py first}
@@ -97,6 +98,10 @@ services:
       MAX_OFFICE_CHARACTERS: ${MAX_OFFICE_CHARACTERS:-5000000}
       MAX_OFFICE_UNCOMPRESSED_BYTES: ${MAX_OFFICE_UNCOMPRESSED_BYTES:-104857600}
       WORKER_HEARTBEAT_SECONDS: ${WORKER_HEARTBEAT_SECONDS:-5}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      VOYAGE_API_KEY: ${VOYAGE_API_KEY:-}
+      DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-flash}
+      VOYAGE_MODEL: ${VOYAGE_MODEL:-voyage-4}
     depends_on:
       database-init:
         condition: service_completed_successfully

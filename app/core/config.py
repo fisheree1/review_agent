@@ -30,7 +30,23 @@ class EnvironmentSettings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",
+        hide_input_in_errors=True,
     )
+
+
+class ModelSettings(EnvironmentSettings):
+    deepseek_api_key: SecretStr = SecretStr("")
+    voyage_api_key: SecretStr = SecretStr("")
+    deepseek_model: str = "deepseek-flash"
+    voyage_model: str = "voyage-4"
+
+
+class RagSettings(EnvironmentSettings):
+    voyage_model: str = "voyage-4"
+
+    @property
+    def profile(self) -> str:
+        return f"{self.voyage_model}:1024:source-window-1500-180-v1"
 
 
 class DatabaseSettings(EnvironmentSettings):

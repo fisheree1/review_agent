@@ -1,0 +1,16 @@
+FAILURES = {
+    "PROVIDER_UNCONFIGURED": "AI 服务尚未配置，资料仍可正常阅读。",
+    "PROVIDER_AUTH": "AI 服务密钥无效或无权限，请检查本地配置。",
+    "PROVIDER_QUOTA": "AI 服务余额或额度不足，请检查服务商账户。",
+    "PROVIDER_LIMIT": "AI 服务请求过于频繁，请稍后重试。",
+    "PROVIDER_TIMEOUT": "AI 服务未及时返回结果；本次是否计费需在服务商确认，重试可能再次计费。",
+    "PROVIDER_UNAVAILABLE": "AI 服务暂时不可用，请稍后重试。",
+    "PROVIDER_RESPONSE": "AI 服务返回格式异常，请稍后重试。",
+    "WORKER_INTERRUPTED": "后台任务中断，已保存的索引可复用；重试可能再次调用未确认的请求。",
+    "INDEX_TOO_LARGE": "资料超过当前索引上限，请拆分后重试。",
+    "NO_INDEXABLE_TEXT": "资料没有可检索的正文。",
+    "EMBEDDING_INVALID": "向量服务返回格式不正确，请检查模型配置。",
+    "ANSWER_INVALID": "回答未通过来源校验，请重新提问或缩小问题范围。",
+    "INDEX_FAILED": "索引建立失败，请重试；已保存的向量会被复用。",
+    "ANSWER_FAILED": "回答生成失败，请稍后重新提问。",
+}

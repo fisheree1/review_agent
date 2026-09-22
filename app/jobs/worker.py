@@ -5,7 +5,9 @@ import logging
 import os
 import signal
 
-from app.core.config import WorkerSettings
+import httpx
+
+from app.core.config import ModelSettings, RagSettings, WorkerSettings
 from app.core.database import async_session_factory, close_database, verify_runtime_database_role
 from app.documents.application.worker import DocumentJobProcessor
 from app.documents.infrastructure.document_parser import DocumentParserRegistry
@@ -14,6 +16,9 @@ from app.documents.infrastructure.pdf_parser import PypdfDocumentParser
 from app.documents.infrastructure.repository import SqlAlchemyDocumentsUnitOfWork
 from app.documents.infrastructure.storage import MinioDocumentStorage
 from app.jobs.heartbeat import run_worker_heartbeat
+from app.rag.application import RagProcessor
+from app.rag.providers import CloudModels
+from app.rag.store import SqlRagStore
 
 
 async def run_worker() -> None:
@@ -66,15 +71,21 @@ async def run_worker() -> None:
         lease_seconds=settings.job_lease_seconds,
     )
 
+    model_client = httpx.AsyncClient(follow_redirects=False)
+    models = CloudModels(ModelSettings(), model_client)
+    rag = RagProcessor(SqlRagStore(async_session_factory, RagSettings().profile), models, models)
     try:
         while not stop_event.is_set():
             processed = await processor.process_next()
+            processed = await rag.process_question() or processed
+            processed = await rag.process_index() or processed
             if not processed:
                 try:
                     await asyncio.wait_for(stop_event.wait(), timeout=settings.job_poll_seconds)
                 except TimeoutError:
                     pass
     finally:
+        await model_client.aclose()
         stop_event.set()
         await heartbeat_task
         logger.info("document_worker_stopped")

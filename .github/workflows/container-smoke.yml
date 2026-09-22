@@ -80,6 +80,11 @@ jobs:
       - name: Verify private PDF lifecycle
         run: docker compose exec -T api python -m scripts.verify_document_flow --base-url http://localhost:8000
 
+      - name: Verify cited retrieval isolation and recovery without cloud requests
+        run: |
+          docker compose stop worker
+          docker compose exec -T api python -m scripts.verify_rag_flow
+
       - name: Show logs after failure
         if: failure()
         run: docker compose logs --no-color

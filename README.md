@@ -1,6 +1,8 @@
 # Review Agent
 
-面向学习资料的 AI 学习平台。当前已具备 React 资料库与阅读器、FastAPI 文档接口、私有文件存储，以及 PDF、DOCX、PPTX 后台解析；后续将扩展可追溯 RAG 与按要求生成 Quiz。
+面向学习资料的 AI 学习平台。当前已具备 React 资料库与阅读器、私有文件存储、PDF/DOCX/PPTX 后台解析，以及基于 Voyage + DeepSeek 的单资料引用问答；后续扩展多资料对话与 Quiz。
+
+RAG 的配置、使用、接口、限制与验证步骤见 [可引用 RAG 实现文档](docs/rag-implementation.md)。在本地 `.env` 配置 `VOYAGE_API_KEY`、`DEEPSEEK_API_KEY` 后重新构建启动，在阅读页选择“基于此资料提问”→“准备资料问答”。真实密钥只注入 Worker，不进入浏览器。
 
 ## 项目文档
 

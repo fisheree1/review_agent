@@ -50,7 +50,7 @@ button, input, select { font: inherit; }
 button, a, label[for] { -webkit-tap-highlight-color: transparent; }
 a { color: inherit; }
 button { color: inherit; }
-button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible, [tabindex]:focus-visible {
+button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible, textarea:focus-visible, [tabindex]:focus-visible {
   outline: 3px solid color-mix(in srgb, var(--focus) 65%, transparent);
   outline-offset: 3px;
 }
@@ -264,3 +264,18 @@ kbd { display: inline-grid; min-width: 24px; min-height: 24px; place-items: cent
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
 }
+.question-panel { margin: 1.5rem 0 2.5rem; padding: 1.5rem; border: 1px solid var(--line); border-radius: 16px; background: var(--surface-soft); }
+.question-panel h2 { font-size: 1.3rem; margin-top: 0; }
+.question-panel__scope { color: var(--text-soft); font-size: .85rem; overflow-wrap: anywhere; }
+.question-panel form { display: grid; gap: .8rem; margin: 1.2rem 0; }
+.question-panel textarea { width: 100%; resize: vertical; min-height: 7rem; padding: .8rem; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--text); font: inherit; }
+.question-panel form button { justify-self: start; }
+.question-answer { border-top: 1px solid var(--line); padding: 1.2rem 0; overflow-wrap: anywhere; }
+.question-answer h3 { font-size: 1rem; }
+.answer-claim p { white-space: pre-wrap; line-height: 1.85; }
+.citation-link { background: var(--accent-soft); color: var(--accent); border: 0; border-radius: 5px; padding: .5rem; margin: 0 .4rem .4rem 0; text-align: left; font: inherit; font-size: .8rem; cursor: pointer; }
+.citation-preview { border-bottom: 1px solid var(--line); padding: 1rem; }
+.citation-preview h3 { font-size: .95rem; }
+.citation-preview blockquote { margin: 1rem 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: .95rem; line-height: 1.8; }
+.question-panel progress { width: 100%; accent-color: var(--accent); }
+@media (max-width: 767px) { .question-panel { padding: 1rem; } }

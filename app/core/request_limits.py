@@ -13,16 +13,21 @@ class RequestBodyTooLarge(Exception):
 
 
 class RequestBodyLimitMiddleware:
-    def __init__(self, app: ASGIApp, *, path: str, max_bytes: int) -> None:
+    def __init__(self, app: ASGIApp, *, path: str, max_bytes: int, prefix: bool = False) -> None:
         self._app = app
         self._path = path
         self._max_bytes = max_bytes
+        self._prefix = prefix
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if (
             scope["type"] != "http"
             or scope.get("method") != "POST"
-            or scope.get("path") != self._path
+            or not (
+                scope.get("path", "").startswith(self._path)
+                if self._prefix
+                else scope.get("path") == self._path
+            )
         ):
             await self._app(scope, receive, send)
             return
@@ -62,7 +67,7 @@ class RequestBodyLimitMiddleware:
             content={
                 "error": {
                     "code": "REQUEST_BODY_TOO_LARGE",
-                    "message": "上传请求超过允许大小",
+                    "message": "请求内容超过允许大小",
                     "details": {},
                 }
             },

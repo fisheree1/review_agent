@@ -111,11 +111,11 @@ async def provision_database_roles() -> None:
             )
             await connection.execute(
                 f"ALTER ROLE {migrator} IN DATABASE {database} "
-                f"SET search_path = {application_schema}, pg_catalog"
+                f"SET search_path = {application_schema}, pg_catalog, public"
             )
             await connection.execute(
                 f"ALTER ROLE {runtime} IN DATABASE {database} "
-                f"SET search_path = {application_schema}, pg_catalog"
+                f"SET search_path = {application_schema}, pg_catalog, public"
             )
     finally:
         await connection.close()
