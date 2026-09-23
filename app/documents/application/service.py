@@ -317,6 +317,7 @@ class DocumentService:
         workspace_public_id: UUID,
         document_public_id: UUID,
         ordinal: int,
+        version_id: int | None = None,
     ) -> DocumentContentResult:
         document = await self.get(
             workspace_public_id=workspace_public_id,
@@ -330,7 +331,7 @@ class DocumentService:
                 details={"status": document.status.value},
             )
         content_count = document.page_count or 0
-        if ordinal > content_count:
+        if version_id is None and ordinal > content_count:
             raise ApplicationError(
                 code="CONTENT_NOT_FOUND",
                 message="该来源位置超出资料范围",
@@ -338,15 +339,26 @@ class DocumentService:
                 details={"content_count": content_count},
             )
         async with self._unit_of_work_factory() as unit_of_work:
+            locations = await unit_of_work.documents.list_content_locations(
+                workspace_public_id=workspace_public_id,
+                document_public_id=document_public_id,
+                version_id=version_id,
+            )
+            if version_id is not None:
+                content_count = len(locations)
+            if version_id is not None and (not locations or ordinal > content_count):
+                raise ApplicationError(
+                    code="CONTENT_NOT_FOUND",
+                    message="该来源位置超出资料范围或版本已删除",
+                    status_code=404,
+                    details={"content_count": content_count},
+                )
             contents = await unit_of_work.documents.list_content(
                 workspace_public_id=workspace_public_id,
                 document_public_id=document_public_id,
                 start_ordinal=ordinal,
                 limit=1,
-            )
-            locations = await unit_of_work.documents.list_content_locations(
-                workspace_public_id=workspace_public_id,
-                document_public_id=document_public_id,
+                version_id=version_id,
             )
         return DocumentContentResult(
             content_count=content_count,

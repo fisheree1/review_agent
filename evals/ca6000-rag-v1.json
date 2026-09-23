@@ -1,0 +1,54 @@
+{
+  "version": "ca6000-rag-v1",
+  "documents": [
+    {
+      "id": "modules",
+      "filename": "CA6000 - Topic 4 (Modules and Packages).pdf",
+      "media_type": "application/pdf"
+    },
+    {
+      "id": "exceptions",
+      "filename": "CA6000 - Topic 6 (Error Handling).pdf",
+      "media_type": "application/pdf"
+    },
+    {
+      "id": "classes",
+      "filename": "CA6000 - Topic 7 (Python Class).pptx",
+      "media_type": "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+    }
+  ],
+  "cases": [
+    {
+      "id": "module_specific_import",
+      "document": "modules",
+      "question": "In the CA6000 modules lecture, how do you import only random.choice and give it the shorter name ch?",
+      "expected": "answer",
+      "locator": { "kind": "page", "position": 3 },
+      "required_term_groups": [["random"], ["choice as ch"]]
+    },
+    {
+      "id": "finally_execution",
+      "document": "exceptions",
+      "question": "According to the CA6000 error handling lecture, when does the finally block execute?",
+      "expected": "answer",
+      "locator": { "kind": "page", "position": 6 },
+      "required_term_groups": [["finally"], ["error", "exception"]]
+    },
+    {
+      "id": "class_blueprint",
+      "document": "classes",
+      "question": "In the CA6000 class lecture, what is a class used as when creating objects?",
+      "expected": "answer",
+      "locator": { "kind": "slide", "position": 3 },
+      "required_term_groups": [["blueprint"], ["object"]]
+    },
+    {
+      "id": "unknown_exam_date",
+      "document": "modules",
+      "question": "What is the exact date and time of the CA6000 final examination?",
+      "expected": "insufficient",
+      "locator": null,
+      "required_term_groups": []
+    }
+  ]
+}

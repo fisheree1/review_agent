@@ -51,7 +51,7 @@ export function QuestionPanel({ documentId, filename, onCitation }: Props) {
       {index.isPending ? <p role="status">正在检查问答准备状态…</p> : null}
       {index.data?.status === "not_indexed" || index.data?.status === "failed" ? (
         <div className="question-panel__setup">
-          <p>建立索引后即可提问。资料正文会发送至 Voyage；提问时，相关片段会发送至 DeepSeek。</p>
+          <p>建立索引后即可提问。资料正文和检索问题会发送至阿里云百炼；提问时，相关片段会发送至 DeepSeek。</p>
           {index.data.failure_message ? <p role="alert">{index.data.failure_message}</p> : null}
           <button className="button button--primary" disabled={indexing.isPending} onClick={() => indexing.mutate()} type="button">
             {indexing.isPending ? "正在提交…" : index.data.status === "failed" ? "重试建立索引" : "准备资料问答"}

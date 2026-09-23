@@ -1,6 +1,11 @@
 import { expect, test } from "@playwright/test";
 
 test("ask within a document, inspect a citation with the keyboard, and open its source", async ({ page }) => {
+  await page.route("**/api/v1/auth/me", (route) => route.fulfill({ json: {
+    user_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    workspace_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+    email: "learner@example.test", csrf_token: "csrf-e2e",
+  } }));
   await page.setViewportSize({ width: 1440, height: 900 });
   const id = "11111111-1111-4111-8111-111111111111";
   const document = { id, filename: "Synthetic learning notes.pdf", media_type: "application/pdf", status: "ready", content_count: 2, page_count: 2, byte_size: 100, created_at: "2026-09-22T00:00:00Z", updated_at: "2026-09-22T00:00:00Z", failure_code: null, failure_message: null };

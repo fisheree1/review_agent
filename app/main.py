@@ -8,12 +8,14 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.auth.api import router as auth_router
 from app.core.config import get_settings
 from app.core.database import close_database, get_db_session, verify_runtime_database_role
 from app.core.errors import ApplicationError
 from app.core.request_limits import RequestBodyLimitMiddleware
 from app.documents.api import router as documents_router
 from app.jobs.models import WorkerHeartbeatModel
+from app.learning.api import router as learning_router
 from app.rag.api import router as rag_router
 
 settings = get_settings()
@@ -37,10 +39,17 @@ app.add_middleware(
     max_bytes=settings.max_upload_bytes + 1024 * 1024,
 )
 app.include_router(documents_router)
+app.include_router(auth_router)
 app.include_router(rag_router)
+app.include_router(learning_router)
 app.add_middleware(
     RequestBodyLimitMiddleware, path="/api/v1/documents/", max_bytes=16384, prefix=True
 )
+app.add_middleware(
+    RequestBodyLimitMiddleware, path="/api/v1/conversations", max_bytes=16384, prefix=True
+)
+app.add_middleware(RequestBodyLimitMiddleware, path="/api/v1/quizzes", max_bytes=16384, prefix=True)
+app.add_middleware(RequestBodyLimitMiddleware, path="/api/v1/auth/", max_bytes=4096, prefix=True)
 
 
 @app.exception_handler(ApplicationError)

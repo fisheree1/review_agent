@@ -1,3 +1,4 @@
+import { apiFetch } from "./client";
 import { parseResponse, type CitationLocator } from "./documents";
 
 export interface IndexStatus {
@@ -12,6 +13,8 @@ export interface Citation {
   quote: string;
   unit: number;
   locator: CitationLocator;
+  document_id?: string | null;
+  version_id?: number | null;
 }
 
 export interface Question {
@@ -24,13 +27,13 @@ export interface Question {
 }
 
 const path = (id: string) => `/api/v1/documents/${id}`;
-export const getIndex = async (id: string) => parseResponse<IndexStatus>(await fetch(`${path(id)}/index`));
-export const getQuestions = async (id: string) => parseResponse<Question[]>(await fetch(`${path(id)}/questions`));
-export const startIndex = async (id: string, key: string) => parseResponse<IndexStatus>(await fetch(`${path(id)}/index`, {
+export const getIndex = async (id: string) => parseResponse<IndexStatus>(await apiFetch(`${path(id)}/index`));
+export const getQuestions = async (id: string) => parseResponse<Question[]>(await apiFetch(`${path(id)}/questions`));
+export const startIndex = async (id: string, key: string) => parseResponse<IndexStatus>(await apiFetch(`${path(id)}/index`, {
   method: "POST", headers: { "Idempotency-Key": key },
 }));
-export const askQuestion = async (id: string, question: string, key: string) => parseResponse<Question>(await fetch(`${path(id)}/questions`, {
+export const askQuestion = async (id: string, question: string, key: string) => parseResponse<Question>(await apiFetch(`${path(id)}/questions`, {
   method: "POST", headers: { "Content-Type": "application/json", "Idempotency-Key": key }, body: JSON.stringify({ question }),
 }));
-export const cancelQuestion = async (id: string, questionId: string) => parseResponse<Question>(await fetch(`${path(id)}/questions/${questionId}:cancel`, { method: "POST" }));
+export const cancelQuestion = async (id: string, questionId: string) => parseResponse<Question>(await apiFetch(`${path(id)}/questions/${questionId}:cancel`, { method: "POST" }));
 export const isAnswering = (question: Question) => question.status === "queued" || question.status === "processing";

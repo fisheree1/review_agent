@@ -1,8 +1,12 @@
 # Review Agent
 
-面向学习资料的 AI 学习平台。当前已具备 React 资料库与阅读器、私有文件存储、PDF/DOCX/PPTX 后台解析，以及基于 Voyage + DeepSeek 的单资料引用问答；后续扩展多资料对话与 Quiz。
+面向学习资料的 AI 学习平台。当前具备 React 资料库与阅读器、私有文件存储、PDF/DOCX/PPTX 后台解析、百炼 Qwen Embedding + DeepSeek 引用问答、资料集合、连续对话、回答反馈与 Quiz 作答复习。
 
-RAG 的配置、使用、接口、限制与验证步骤见 [可引用 RAG 实现文档](docs/rag-implementation.md)。在本地 `.env` 配置 `VOYAGE_API_KEY`、`DEEPSEEK_API_KEY` 后重新构建启动，在阅读页选择“基于此资料提问”→“准备资料问答”。真实密钥只注入 Worker，不进入浏览器。
+RAG 的配置、使用、接口、限制与验证步骤见 [可引用 RAG 实现文档](docs/rag-implementation.md)。在本地 `.env` 配置 `DASHSCOPE_API_KEY`、`DASHSCOPE_EMBEDDING_URL`、`DEEPSEEK_API_KEY` 后重新构建启动，在阅读页选择“基于此资料提问”→“准备资料问答”。真实密钥只注入 Worker，不进入浏览器。
+
+本机 CA6000 课件的单资料真实评测及多资料能力的后续真实评测计划，见 [CA6000 RAG 评测](docs/ca6000-rag-evaluation.md)。
+
+进入“学习问答”可创建最多包含 5 份已索引资料的集合或对话，在对话中切换后续问题范围，并对已保存的回答反馈。进入“Quiz”可按题型数量、难度、语言和知识点出题；作答后查看评分、解析、薄弱知识点及原文。任务由 Worker 异步处理，页面会显示处理状态。
 
 ## 项目文档
 
@@ -35,7 +39,7 @@ RAG 的配置、使用、接口、限制与验证步骤见 [可引用 RAG 实现
 - 数据：文档元数据、文本块、向量、对话、Quiz、作答记录。
 - 运维：FastAPI、PostgreSQL + pgvector、Docker Compose、健康检查、环境变量。
 
-### 建议的后续模块边界
+### 当前主要模块边界
 
 ```text
 app/
@@ -43,8 +47,7 @@ app/
   core/          # 配置、数据库、日志、安全
   documents/     # 上传、解析、文档生命周期
   rag/           # 分块、Embedding、检索、引用
-  agents/        # Agent 工作流和模型适配器
-  quizzes/       # 出题、校验、评分、解析
+  learning/      # 集合、连续对话、反馈、Quiz 与作答
   jobs/          # 异步索引任务
 ```
 
@@ -60,6 +63,7 @@ app/
 - PDF、DOCX、PPTX 流式上传校验、正文解析、状态查询、失败说明和删除。
 - PDF 页码、DOCX 标题路径、PPTX 幻灯片编号使用统一 citation locator。
 - React 资料库、上传进度、处理状态、按来源位置阅读和引用面板。
+- 资料集合、多资料问答、范围切换、回答反馈，以及有来源校验的 Quiz 生成、评分与复习。
 - API、数据库与文档 Worker 存活/就绪健康检查。
 - 后端、前端与容器闭环自动化测试。
 
@@ -91,7 +95,13 @@ curl http://localhost:8000/health/worker
 
 接口文档：<http://localhost:8000/docs>
 
-Web 容器通过同源代理访问 API，并在服务端附加本地开发令牌；令牌不会写入浏览器包。当前代理只用于回环地址上的单用户开发环境，生产部署需接入正式认证网关。
+Web 容器通过同源代理访问 API。浏览器使用账号密码登录和服务端会话；开发令牌仅供本地脚本兼容，生产环境不接受。首次部署默认关闭自行注册，先创建账号并接管已有本地空间：
+
+```bash
+docker compose run --rm --no-deps api python -m scripts.create_user --email you@example.com --claim-local-workspace
+```
+
+新部署无旧资料时去掉 `--claim-local-workspace`，系统会创建个人空间。密码通过终端交互输入，至少 12 字符。需要自行注册时设置 `AUTH_ALLOW_SIGNUP=true`；生产环境还须设置实际 HTTPS 页面来源 `AUTH_PUBLIC_ORIGIN`，在同源 HTTPS 入口下提供 Web 与 API。
 
 Compose 启动时先运行两个幂等初始化任务：`database-init` 配置最小权限数据库角色并执行 Alembic；`storage-init` 创建私有 bucket 和仅可访问该 bucket 的应用账号。API 与 Worker 不接收数据库或对象存储管理凭据。需要单独重跑初始化与迁移时使用：
 
@@ -123,7 +133,7 @@ curl 'http://127.0.0.1:8000/api/v1/documents/<document-id>/content?ordinal=1' \
   -H "Authorization: Bearer ${LOCAL_API_TOKEN}"
 ```
 
-失败资料可用 `POST /api/v1/documents/{id}:retry` 并携带稳定的 `Idempotency-Key` 重试；删除使用 `DELETE /api/v1/documents/{id}`。PDF 需包含可提取文字，扫描版会返回 `PDF_TEXT_NOT_FOUND` 并提示后续需要 OCR。DOCX 按标题层级分段，PPTX 按幻灯片分段并读取演讲者备注；图片中的文字暂不执行 OCR。
+界面一次可选择最多 10 份文件，逐份显示进度与结果，并可重试失败项。失败资料可用 `POST /api/v1/documents/{id}:retry` 并携带稳定的 `Idempotency-Key` 重试；删除使用 `DELETE /api/v1/documents/{id}`。PDF 文字页直接提取，扫描页由 Worker 使用英文和简体中文 OCR 识别并保留页码；完全无法识别文字时返回 `PDF_TEXT_NOT_FOUND`。DOCX 按标题层级分段，PPTX 按幻灯片分段并读取演讲者备注；Office 图片中的文字暂不执行 OCR。
 
 可用一份本地 PDF 运行完整验收；脚本不会把资料加入 Git，成功解析的样例会保留在本机资料库：
 
@@ -149,7 +159,7 @@ uv run fastapi dev app/main.py
 uv run pytest
 
 pnpm --dir web install --frozen-lockfile
-LOCAL_API_TOKEN=<本地令牌> pnpm --dir web dev
+pnpm --dir web dev
 pnpm --dir web typecheck
 pnpm --dir web test
 pnpm --dir web build

@@ -34,6 +34,8 @@ class CitationResponse(BaseModel):
     quote: str
     unit: int
     locator: CitationLocatorResponse
+    document_id: UUID | None = None
+    version_id: int | None = None
 
 
 class ClaimResponse(BaseModel):

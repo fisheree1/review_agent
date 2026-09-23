@@ -2,6 +2,11 @@ FROM ghcr.io/astral-sh/uv:0.12.13 AS uv
 
 FROM python:3.13-slim AS runtime
 
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        poppler-utils tesseract-ocr tesseract-ocr-eng tesseract-ocr-chi-sim \
+    && rm -rf /var/lib/apt/lists/*
+
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PATH="/app/.venv/bin:$PATH"

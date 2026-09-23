@@ -8,11 +8,13 @@ from sqlalchemy import pool, text
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
+from app.auth import models as auth_models
 from app.core.config import MigrationSettings
 from app.core.database_schema import APPLICATION_SCHEMA, MIGRATION_SCHEMA
 from app.core.models import Base
 from app.documents.infrastructure import models as document_models
 from app.jobs import models as job_models
+from app.learning import models as learning_models
 from app.rag import models as rag_models
 
 config = context.config
@@ -23,6 +25,8 @@ target_metadata = Base.metadata
 assert document_models.WorkspaceModel.__table__.schema == APPLICATION_SCHEMA
 assert job_models.WorkerHeartbeatModel.__table__.schema == APPLICATION_SCHEMA
 assert rag_models.DocumentIndex.__table__.schema == APPLICATION_SCHEMA
+assert learning_models.Quiz.__table__.schema == APPLICATION_SCHEMA
+assert auth_models.AuthSession.__table__.schema == "review_agent_auth"
 
 
 def _migration_settings() -> MigrationSettings:

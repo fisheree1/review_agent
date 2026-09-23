@@ -40,6 +40,8 @@ class Evidence:
     unit: int
     locator: dict[str, Any]
     similarity: float = 0.0
+    document_id: UUID | None = None
+    version_id: int | None = None
 
 
 @dataclass(frozen=True)
@@ -119,6 +121,11 @@ def validate_answer(payload: dict[str, Any], sources: list[Evidence]) -> dict[st
                     "quote": quote,
                     "unit": source.unit,
                     "locator": source.locator,
+                    **(
+                        {"document_id": str(source.document_id), "version_id": source.version_id}
+                        if source.document_id is not None
+                        else {}
+                    ),
                 }
             )
         validated.append({"text": text.strip(), "citations": checked})

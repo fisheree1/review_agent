@@ -1,3 +1,5 @@
+import { apiFetch, getCsrfToken } from "./client";
+
 export type DocumentStatus =
   | "uploaded"
   | "queued"
@@ -91,12 +93,12 @@ export async function parseResponse<T>(response: Response): Promise<T> {
 export async function listDocuments(cursor?: string): Promise<DocumentListResponse> {
   const query = new URLSearchParams({ limit: "30" });
   if (cursor) query.set("cursor", cursor);
-  const response = await fetch(`/api/v1/documents?${query}`, { headers: { Accept: "application/json" } });
+  const response = await apiFetch(`/api/v1/documents?${query}`, { headers: { Accept: "application/json" } });
   return parseResponse<DocumentListResponse>(response);
 }
 
 export async function getDocument(documentId: string): Promise<DocumentSummary> {
-  const response = await fetch(`/api/v1/documents/${documentId}`, {
+  const response = await apiFetch(`/api/v1/documents/${documentId}`, {
     headers: { Accept: "application/json" },
   });
   return parseResponse<DocumentSummary>(response);
@@ -105,16 +107,18 @@ export async function getDocument(documentId: string): Promise<DocumentSummary> 
 export async function getDocumentContent(
   documentId: string,
   ordinal: number,
+  versionId?: number,
 ): Promise<DocumentContentResponse> {
   const query = new URLSearchParams({ ordinal: String(ordinal) });
-  const response = await fetch(`/api/v1/documents/${documentId}/content?${query}`, {
+  if (versionId !== undefined) query.set("version_id", String(versionId));
+  const response = await apiFetch(`/api/v1/documents/${documentId}/content?${query}`, {
     headers: { Accept: "application/json" },
   });
   return parseResponse<DocumentContentResponse>(response);
 }
 
 export async function retryDocument(documentId: string): Promise<DocumentSummary> {
-  const response = await fetch(`/api/v1/documents/${documentId}:retry`, {
+  const response = await apiFetch(`/api/v1/documents/${documentId}:retry`, {
     method: "POST",
     headers: {
       Accept: "application/json",
@@ -125,7 +129,7 @@ export async function retryDocument(documentId: string): Promise<DocumentSummary
 }
 
 export async function deleteDocument(documentId: string): Promise<void> {
-  const response = await fetch(`/api/v1/documents/${documentId}`, { method: "DELETE" });
+  const response = await apiFetch(`/api/v1/documents/${documentId}`, { method: "DELETE" });
   if (!response.ok) await parseResponse<never>(response);
 }
 
@@ -133,13 +137,16 @@ export function uploadDocument(
   file: File,
   onProgress: (progress: number) => void,
   signal?: AbortSignal,
+  idempotencyKey?: string,
 ): Promise<DocumentSummary> {
   return new Promise((resolve, reject) => {
     const request = new XMLHttpRequest();
     request.open("POST", "/api/v1/documents");
     request.responseType = "json";
     request.setRequestHeader("Accept", "application/json");
-    request.setRequestHeader("Idempotency-Key", crypto.randomUUID());
+    const csrfToken = getCsrfToken();
+    if (csrfToken) request.setRequestHeader("X-CSRF-Token", csrfToken);
+    request.setRequestHeader("Idempotency-Key", idempotencyKey ?? crypto.randomUUID());
     request.upload.addEventListener("progress", (event) => {
       if (event.lengthComputable) onProgress(Math.round((event.loaded / event.total) * 100));
     });

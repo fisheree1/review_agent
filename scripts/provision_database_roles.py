@@ -5,7 +5,7 @@ import asyncio
 import asyncpg  # type: ignore[import-untyped]
 
 from app.core.config import ProvisioningSettings
-from app.core.database_schema import APPLICATION_SCHEMA, MIGRATION_SCHEMA
+from app.core.database_schema import APPLICATION_SCHEMA, AUTH_SCHEMA, MIGRATION_SCHEMA
 
 
 async def _quoted_identifier(connection: asyncpg.Connection, value: str) -> str:
@@ -73,6 +73,7 @@ async def provision_database_roles() -> None:
             )
             database = await _quoted_identifier(connection, settings.postgres_db)
             application_schema = await _quoted_identifier(connection, APPLICATION_SCHEMA)
+            auth_schema = await _quoted_identifier(connection, AUTH_SCHEMA)
             migration_schema = await _quoted_identifier(connection, MIGRATION_SCHEMA)
 
             await connection.execute(f"REVOKE TEMPORARY ON DATABASE {database} FROM PUBLIC")
@@ -85,19 +86,32 @@ async def provision_database_roles() -> None:
             )
             await connection.execute(f"ALTER SCHEMA {application_schema} OWNER TO {migrator}")
             await connection.execute(
+                f"CREATE SCHEMA IF NOT EXISTS {auth_schema} AUTHORIZATION {migrator}"
+            )
+            await connection.execute(f"ALTER SCHEMA {auth_schema} OWNER TO {migrator}")
+            await connection.execute(
                 f"CREATE SCHEMA IF NOT EXISTS {migration_schema} AUTHORIZATION {migrator}"
             )
             await connection.execute(f"ALTER SCHEMA {migration_schema} OWNER TO {migrator}")
 
             await connection.execute(f"REVOKE ALL ON SCHEMA {application_schema} FROM PUBLIC")
+            await connection.execute(f"REVOKE ALL ON SCHEMA {auth_schema} FROM PUBLIC")
             await connection.execute(f"REVOKE ALL ON SCHEMA {migration_schema} FROM PUBLIC")
             await connection.execute(f"GRANT USAGE ON SCHEMA {application_schema} TO {runtime}")
+            await connection.execute(f"GRANT USAGE ON SCHEMA {auth_schema} TO {runtime}")
             await connection.execute(
                 f"GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES "
                 f"IN SCHEMA {application_schema} TO {runtime}"
             )
             await connection.execute(
                 f"GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA {application_schema} TO {runtime}"
+            )
+            await connection.execute(
+                f"GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES "
+                f"IN SCHEMA {auth_schema} TO {runtime}"
+            )
+            await connection.execute(
+                f"GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA {auth_schema} TO {runtime}"
             )
             await connection.execute(
                 f"ALTER DEFAULT PRIVILEGES FOR ROLE {migrator} "
@@ -107,6 +121,16 @@ async def provision_database_roles() -> None:
             await connection.execute(
                 f"ALTER DEFAULT PRIVILEGES FOR ROLE {migrator} "
                 f"IN SCHEMA {application_schema} "
+                f"GRANT USAGE, SELECT ON SEQUENCES TO {runtime}"
+            )
+            await connection.execute(
+                f"ALTER DEFAULT PRIVILEGES FOR ROLE {migrator} "
+                f"IN SCHEMA {auth_schema} "
+                f"GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO {runtime}"
+            )
+            await connection.execute(
+                f"ALTER DEFAULT PRIVILEGES FOR ROLE {migrator} "
+                f"IN SCHEMA {auth_schema} "
                 f"GRANT USAGE, SELECT ON SEQUENCES TO {runtime}"
             )
             await connection.execute(

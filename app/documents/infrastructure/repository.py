@@ -280,6 +280,7 @@ class SqlAlchemyDocumentRepository(DocumentRepository):
         document_public_id: UUID,
         start_ordinal: int,
         limit: int,
+        version_id: int | None = None,
     ) -> tuple[DocumentContent, ...]:
         rows = (
             await self._session.execute(
@@ -295,12 +296,15 @@ class SqlAlchemyDocumentRepository(DocumentRepository):
                     DocumentVersionModel,
                     DocumentVersionModel.id == DocumentPageModel.document_version_id,
                 )
-                .join(DocumentModel, DocumentModel.active_version_id == DocumentVersionModel.id)
+                .join(DocumentModel, DocumentModel.id == DocumentVersionModel.document_id)
                 .join(WorkspaceModel, WorkspaceModel.id == DocumentModel.workspace_id)
                 .where(
                     WorkspaceModel.public_id == workspace_public_id,
                     DocumentModel.public_id == document_public_id,
                     DocumentModel.status == DocumentStatus.READY.value,
+                    DocumentModel.deleted_at.is_(None),
+                    DocumentVersionModel.id
+                    == (version_id if version_id is not None else DocumentModel.active_version_id),
                     DocumentPageModel.workspace_id == WorkspaceModel.id,
                     DocumentPageModel.page_number >= start_ordinal,
                 )
@@ -327,6 +331,7 @@ class SqlAlchemyDocumentRepository(DocumentRepository):
         *,
         workspace_public_id: UUID,
         document_public_id: UUID,
+        version_id: int | None = None,
     ) -> tuple[DocumentContentLocation, ...]:
         rows = (
             await self._session.execute(
@@ -341,12 +346,15 @@ class SqlAlchemyDocumentRepository(DocumentRepository):
                     DocumentVersionModel,
                     DocumentVersionModel.id == DocumentPageModel.document_version_id,
                 )
-                .join(DocumentModel, DocumentModel.active_version_id == DocumentVersionModel.id)
+                .join(DocumentModel, DocumentModel.id == DocumentVersionModel.document_id)
                 .join(WorkspaceModel, WorkspaceModel.id == DocumentModel.workspace_id)
                 .where(
                     WorkspaceModel.public_id == workspace_public_id,
                     DocumentModel.public_id == document_public_id,
                     DocumentModel.status == DocumentStatus.READY.value,
+                    DocumentModel.deleted_at.is_(None),
+                    DocumentVersionModel.id
+                    == (version_id if version_id is not None else DocumentModel.active_version_id),
                     DocumentPageModel.workspace_id == WorkspaceModel.id,
                 )
                 .order_by(DocumentPageModel.page_number)

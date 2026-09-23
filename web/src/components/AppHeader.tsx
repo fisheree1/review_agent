@@ -21,6 +21,12 @@ export function AppHeader({ onMenu, children }: AppHeaderProps) {
           <span className="brand__mark"><Icon name="book" /></span>
           <span>Review Agent</span>
         </Link>
+        <nav aria-label="主要导航" className="primary-nav">
+          <Link to="/">资料库</Link>
+          <Link to="/study">学习空间</Link>
+          <Link to="/quizzes">Quiz</Link>
+          <Link to="/account">账号</Link>
+        </nav>
       </div>
       <div className="app-header__actions">
         {children}

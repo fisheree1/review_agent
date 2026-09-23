@@ -2,7 +2,7 @@
 
 版本：0.1
 数据库：PostgreSQL 17 + pgvector
-状态：`0001`–`0007` 已建立最小权限、资料摄取与统一引用定位；`0008_cited_rag` 增加版本化索引、1024 维分块和单资料问答任务。认证成员关系、多轮对话与 Quiz 表仍待对应阶段迁移。
+状态：`0001`–`0007` 建立最小权限、资料摄取与统一引用定位；`0008_cited_rag` 增加版本化索引、1024 维分块和单资料问答任务；`0009_learning_core` 增加集合、连续对话、反馈、Quiz 与作答；`0010_user_auth` 增加正式账号、成员、密码哈希与服务端会话；`0011_version_purge_trigger` 修正来源版本删除的清理触发条件。
 
 ## 当前 RAG 实现与目标设计的差异
 
@@ -10,7 +10,7 @@
 
 `rag_questions` 是独立提问任务与结果，不冒充连续对话；绑定 workspace 和解析版本，按空间强制请求幂等。回答 JSON 仅保存已验证的逐条 claim、原文摘录和来源位置，usage 保存模型、策略版本与生成 Token。版本被删除时三张表级联清理，不保留悬空原文副本。
 
-当前数据量使用带范围索引的精确向量查询与动态全文排名，尚未创建目标设计中的 HNSW/GIN；需要以召回、查询计划和规模证据决定何时加入。升级、回退和集成检查见 [RAG 文档](./rag-implementation.md)。
+当前数据量使用带范围索引的精确向量查询与动态全文排名，尚未创建目标设计中的 HNSW/GIN；需要以召回、查询计划和规模证据决定何时加入。当前百炼 `qwen3.7-text-embedding` 固定输出 1024 维，profile 与旧 Voyage 索引不同；切换不修改表结构、不删除旧向量，已有资料按需重新索引。升级、回退和集成检查见 [RAG 文档](./rag-implementation.md)。
 
 ## 1. 设计目标
 
@@ -79,22 +79,21 @@ erDiagram
 | --- | --- | --- |
 | id | bigint identity | PK，内部使用 |
 | public_id | uuid | UNIQUE，对外 ID |
-| auth_subject | text | UNIQUE，认证系统用户标识 |
-| email_normalized | text | 可选；UNIQUE，最小化保存 |
-| status | text | active / suspended / deleted |
-| created_at / updated_at | timestamptz | 审计时间 |
+| email_normalized | varchar(254) | UNIQUE，登录标识 |
+| status | varchar(20) | active / suspended |
+| created_at | timestamptz | 创建时间 |
 
-密码认证若交给外部身份服务，数据库不保存密码。若未来自建认证，密码哈希必须进入独立认证 schema，使用成熟密码哈希算法和轮换策略。
+密码哈希保存在独立 `review_agent_auth.password_credentials` 表，使用 Argon2id；会话表仅存令牌 SHA-256 摘要、CSRF 标记、工作区、过期与撤销时间。`login_limits` 按邮箱摘要记录失败次数与锁定期限。认证 schema 与应用 schema 同由迁移角色拥有，运行角色只拥有 DML 权限。
 
 #### `workspaces`
 
-当前迁移包含 `id`、`public_id`、`name`、`status`、`created_at`、`updated_at`。`owner_user_id`、成员和套餐字段等待认证方案确定后再扩展，避免先写入虚假身份模型。
+当前迁移包含 `id`、`public_id`、`name`、`status`、`created_at`、`updated_at`；成员关系由 `workspace_members` 维护。
 
 即使 MVP 是个人空间，也保留 workspace 边界，避免未来给所有表补租户列。
 
 #### `workspace_members`
 
-联合唯一键 `(workspace_id, user_id)`；角色为 `owner/admin/member/viewer`。权限仍由应用层集中计算，角色字符串不直接等于所有操作权限。
+联合唯一键 `(user_id, workspace_id)`；当前角色为 `owner/member`。会话对用户、成员和工作区状态进行校验；应用层按会话的 workspace 过滤资料、问答和 Quiz。
 
 ### 5.2 资料与索引
 
@@ -173,37 +172,27 @@ Embedding 维度不能模糊配置后直接上线。首个模型确定后固定 
 
 包含 `aggregate_type`、`aggregate_id`、`event_type`、`payload jsonb`、`created_at`、`published_at`、`attempts`。业务写入与 outbox 写入同一事务；发布器使用 `FOR UPDATE SKIP LOCKED` 批量领取。
 
-### 5.4 对话与引用
+### 5.4 集合、对话与引用（`0009`）
 
-#### `conversations`
+`collections` 保存工作区内集合，`collection_documents` 使用复合外键约束集合和资料同属工作区。`conversations` 保存标题和当前范围快照；`conversation_messages` 各自保存提问时的范围、状态、校验后的回答和受限的模型用量信息。`answer_feedback` 对已完成消息保存单条反馈与幂等键。
 
-保存 `workspace_id`、`public_id`、`title`、`created_by`、`scope_snapshot jsonb` 和时间字段。scope snapshot 保存当时选中的 collection/document public IDs，便于重现对话范围。
-
-#### `messages`
-
-保存角色、内容、状态、模型、Prompt 版本、输入/输出 Token、延迟、错误码和时间。原始 provider response 只在确有审计需求时加密、限时保存。
-
-#### `message_citations`
-
-关联 message 与 chunk，保存引用顺序、引用文本范围、相关性分数和显示标签。引用指向特定 document version，保证文档重新索引后历史回答仍可解释。
+`conversation_documents` 关联对话历史引用过的解析版本。`0011` 在解析版本实际删除前清理引用它的对话及 Quiz，避免在文档删除后保留引文副本；普通范围切换删除关联记录时不会删除对话。范围切换只影响后续消息；历史消息仍显示提问时范围。回答 JSON 包含精确解析版本、正文位置及摘录，历史原文读取可指定版本。当前没有单独的 `message_citations` 表，引用只随已校验回答保存。
 
 ### 5.5 Quiz 与作答
 
-#### `quizzes`
+#### `quizzes` / `quiz_documents`
 
-保存 workspace、标题、状态、生成配置 JSONB、资料范围快照、版本、题数、Prompt/模型版本、创建者和时间。
+Quiz 保存工作区、标题、生成配置、原始请求范围、解析版本范围快照及状态；原始请求范围用于幂等重试冲突检查。关联表约束来源解析版本与工作区一致。删除来源版本时会清除依赖该版本的 Quiz 与作答。
 
 #### `quiz_questions`
 
-保存 `quiz_id`、`ordinal`、`question_type`、题干、选项 JSONB、正确答案 JSONB、解析、难度、知识点、验证状态。选项/答案使用 JSONB 是因为题型结构不同，但必须经过版本化 Pydantic schema 校验。
+保存题序、题型、题干、选项、答案、解析、难度、知识点、来源和生成 schema 版本。出题先由领域规则验证题型、选项、答案、去重与来源摘录，再原子发布题目。未提交作答时 API 不返回答案、解析和来源。
 
-#### `question_sources`
-
-关联题目与 chunk，保存引用片段与顺序。没有有效 source 的生成题不得进入 ready 状态。
+当前题目来源保存在 `quiz_questions.sources` JSONB，包含 chunk ID、document ID、解析版本、locator 和原文摘录；没有可验证来源的候选题不会发布。
 
 #### `quiz_attempts` / `quiz_answers`
 
-attempt 保存用户、开始/提交时间、状态、总分与 Quiz 版本；answer 保存题目、用户答案、得分、反馈和评分方式。唯一键 `(attempt_id, question_id)` 防止重复答案。
+attempt 保存状态、总分与薄弱知识点；answer 保存题目、用户答案、得分、反馈和评分方式。唯一键 `(attempt_id, question_id)` 防止重复答案。正式用户归属依赖后续认证方案，当前以 workspace 隔离。
 
 ## 6. 索引策略
 

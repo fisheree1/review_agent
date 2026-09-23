@@ -82,6 +82,14 @@ export function ReaderPage() {
   const currentOrdinal = Number.isInteger(requestedOrdinal) && requestedOrdinal > 0
     ? requestedOrdinal
     : 1;
+  const requestedVersion = Number(searchParams.get("version"));
+  const historicalVersion = Number.isInteger(requestedVersion) && requestedVersion > 0 ? requestedVersion : undefined;
+  const selectParams = useCallback((ordinal: number) => {
+    const next = new URLSearchParams(searchParams);
+    next.set("unit", String(ordinal));
+    next.delete("page");
+    setSearchParams(next, { replace: true });
+  }, [searchParams, setSearchParams]);
   const closeQuestions = useCallback(() => {
     setIsQuestionsOpen(false);
     setActivePanel(previousPanelRef.current);
@@ -91,14 +99,14 @@ export function ReaderPage() {
     if (!position) return;
     pendingRestoreRef.current = position;
     if (currentOrdinal !== position.unit) {
-      setSearchParams({ unit: String(position.unit) }, { replace: true });
+      selectParams(position.unit);
     } else {
       window.requestAnimationFrame(() => {
         window.scrollTo(0, position.top);
         pendingRestoreRef.current = null;
       });
     }
-  }, [currentOrdinal, setSearchParams]);
+  }, [currentOrdinal, selectParams]);
   useFocusTrap(questionRef, isCompact && activePanel === "questions", closeQuestions);
   const openQuestions = useCallback(() => {
     if (!isQuestionsOpen) {
@@ -130,8 +138,8 @@ export function ReaderPage() {
     },
   });
   const contentQuery = useQuery({
-    queryKey: ["documents", documentId, "content", currentOrdinal],
-    queryFn: () => getDocumentContent(documentId, currentOrdinal),
+    queryKey: ["documents", documentId, "content", currentOrdinal, historicalVersion],
+    queryFn: () => getDocumentContent(documentId, currentOrdinal, historicalVersion),
     enabled: documentQuery.data?.status === "ready",
   });
   const retryMutation = useMutation({
@@ -160,7 +168,9 @@ export function ReaderPage() {
     setActivePanel(window.matchMedia("(min-width: 1100px)").matches ? "references" : null);
   }, [documentId]);
   const contents = contentQuery.data?.contents ?? [];
-  const contentCount = document?.content_count ?? contentQuery.data?.content_count ?? 0;
+  const contentCount = historicalVersion
+    ? contentQuery.data?.content_count ?? 0
+    : document?.content_count ?? contentQuery.data?.content_count ?? 0;
   const error = documentQuery.error ?? contentQuery.error ?? retryMutation.error;
   const isLoading = documentQuery.isPending || (document?.status === "ready" && contentQuery.isPending);
 
@@ -176,7 +186,7 @@ export function ReaderPage() {
     if (contentCount === 0 || (!searchParams.has("unit") && !searchParams.has("page"))) return;
     const boundedOrdinal = Math.min(Math.max(currentOrdinal, 1), contentCount);
     if (boundedOrdinal !== currentOrdinal || searchParams.has("page")) {
-      setSearchParams({ unit: String(boundedOrdinal) }, { replace: true });
+      selectParams(boundedOrdinal);
       return;
     }
     if (!contentQuery.data?.contents.some((content) => content.ordinal === boundedOrdinal)) return;
@@ -195,13 +205,13 @@ export function ReaderPage() {
       if (pendingFocusRef.current) source?.focus({ preventScroll: true });
       pendingFocusRef.current = false;
     });
-  }, [contentCount, contentQuery.data, currentOrdinal, highlightedCitation, searchParams, setSearchParams]);
+  }, [contentCount, contentQuery.data, currentOrdinal, highlightedCitation, searchParams, selectParams]);
 
   const selectContent = useCallback((ordinal: number) => {
     const bounded = Math.min(Math.max(ordinal, 1), Math.max(contentCount, 1));
     setHighlightedCitation(null);
     pendingFocusRef.current = true;
-    setSearchParams({ unit: String(bounded) }, { replace: true });
+    selectParams(bounded);
     if (bounded === currentOrdinal) {
       window.requestAnimationFrame(() => {
         const source = window.document.getElementById(`content-${bounded}`);
@@ -210,12 +220,12 @@ export function ReaderPage() {
         pendingFocusRef.current = false;
       });
     }
-  }, [contentCount, currentOrdinal, setSearchParams]);
+  }, [contentCount, currentOrdinal, selectParams]);
 
   const openCitation = useCallback((citation: Citation) => {
     setHighlightedCitation(citation);
     pendingFocusRef.current = true;
-    setSearchParams({ unit: String(citation.unit) }, { replace: true });
+    selectParams(citation.unit);
     if (citation.unit === currentOrdinal) {
       window.requestAnimationFrame(() => {
         const source = window.document.getElementById(`content-${citation.unit}`);
@@ -225,7 +235,7 @@ export function ReaderPage() {
       });
     }
     if (isCompact) setActivePanel(null);
-  }, [currentOrdinal, isCompact, setSearchParams]);
+  }, [currentOrdinal, isCompact, selectParams]);
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
@@ -269,7 +279,7 @@ export function ReaderPage() {
           onReadingWidthChange={setReadingWidth}
           readingWidth={readingWidth}
         />
-        {document?.status === "ready" ? <button
+        {document?.status === "ready" && !historicalVersion ? <button
           aria-controls={hasOpenedQuestions ? "reader-questions" : undefined}
           aria-expanded={activePanel === "questions"}
           aria-label={activePanel === "questions" ? "收起资料问答" : "打开资料问答"}
@@ -340,6 +350,8 @@ export function ReaderPage() {
               onRetry={retryMutation.isPending ? undefined : () => retryMutation.mutate()}
               title="这份资料没有处理成功"
             />
+          ) : contentQuery.isError ? (
+            <ErrorState message={contentQuery.error.message} onRetry={() => void contentQuery.refetch()} title="无法打开这处来源" />
           ) : document ? (
             <article
               className={`document-reader document-reader--${readingWidth}`}
@@ -349,8 +361,9 @@ export function ReaderPage() {
                 <Link className="text-link" to="/"><Icon name="chevronLeft" />资料库</Link>
                 <span className="eyebrow">{contentCountLabel(document)} · {documentTypeLabel(document.media_type)}</span>
                 <h1>{document.filename}</h1>
+                {historicalVersion ? <p role="status">正在阅读历史解析版本的原文。</p> : null}
                 <p>正文保留原始来源位置。使用 <kbd>[</kbd> 与 <kbd>]</kbd> 可以前后移动。</p>
-                <button aria-controls={hasOpenedQuestions ? "reader-questions" : undefined} aria-expanded={activePanel === "questions"} className="button button--secondary" onClick={() => activePanel === "questions" ? closeQuestions() : openQuestions()} type="button">{activePanel === "questions" ? "收起资料问答" : isQuestionsOpen ? "返回资料问答" : "基于此资料提问"}</button>
+                {!historicalVersion ? <button aria-controls={hasOpenedQuestions ? "reader-questions" : undefined} aria-expanded={activePanel === "questions"} className="button button--secondary" onClick={() => activePanel === "questions" ? closeQuestions() : openQuestions()} type="button">{activePanel === "questions" ? "收起资料问答" : isQuestionsOpen ? "返回资料问答" : "基于此资料提问"}</button> : null}
                 <button className="button button--danger-quiet document-reader__delete" onClick={() => setIsDeleteOpen(true)} type="button">
                   删除资料
                 </button>
@@ -362,7 +375,7 @@ export function ReaderPage() {
                     className={`reading-page${content.ordinal === currentOrdinal ? " reading-page--current" : ""}${highlightedCitation?.unit === content.ordinal ? " reading-page--cited" : ""}`}
                     id={`content-${content.ordinal}`}
                     key={content.ordinal}
-                    onClick={() => setSearchParams({ unit: String(content.ordinal) }, { replace: true })}
+                    onClick={() => selectParams(content.ordinal)}
                     tabIndex={-1}
                   >
                     <div className="reading-page__number">
@@ -381,7 +394,7 @@ export function ReaderPage() {
           ) : null}
         </main>
 
-        {hasOpenedQuestions && document?.status === "ready" ? (
+        {hasOpenedQuestions && document?.status === "ready" && !historicalVersion ? (
           <aside
             aria-label="资料问答"
             aria-modal={isCompact && activePanel === "questions" || undefined}

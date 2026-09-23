@@ -96,6 +96,7 @@ class DocumentRepository(Protocol):
         document_public_id: UUID,
         start_ordinal: int,
         limit: int,
+        version_id: int | None = None,
     ) -> tuple[DocumentContent, ...]: ...
 
     async def list_content_locations(
@@ -103,6 +104,7 @@ class DocumentRepository(Protocol):
         *,
         workspace_public_id: UUID,
         document_public_id: UUID,
+        version_id: int | None = None,
     ) -> tuple[DocumentContentLocation, ...]: ...
 
     async def queue_retry(

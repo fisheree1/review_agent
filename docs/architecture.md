@@ -40,7 +40,7 @@ flowchart LR
     WORKER --> OBS
 ```
 
-当前本地环境用 Docker Compose 运行 React Web、API、Worker、PostgreSQL 和兼容 S3 的 MinIO。Web 通过同源 Node 代理调用 API，本地访问令牌只存在于代理进程环境中，不进入浏览器包。生产环境需用正式认证网关替代该单用户开发代理，并使用托管 PostgreSQL 与对象存储，API 和 Worker分别扩缩容。
+当前本地环境用 Docker Compose 运行 React Web、API、Worker、PostgreSQL 和兼容 S3 的 MinIO。Web 通过同源代理调用 API；用户使用邮箱、密码和服务端会话登录。认证账号与工作区成员关系位于应用 schema，密码哈希与会话摘要位于独立认证 schema。生产环境使用 HTTPS、Secure/HttpOnly/SameSite Cookie 和 CSRF 校验；本地脚本令牌仅在开发模式有效。生产部署仍需配置备份、监控、外部服务预算及实际入口域名。
 
 ### 2.1 技术选型基线
 
@@ -120,7 +120,7 @@ Domain 不导入 FastAPI、SQLAlchemy、模型 SDK、Redis 或对象存储 SDK�
 
 ### 4.2 RAG 问答
 
-当前已实现的单资料闭环见 [RAG 实现与验收](./rag-implementation.md)。`rag` 模块以独立领域规则、应用用例和持久化/HTTP 适配器构成；应用通过 `RagStore` 原子命令接口控制短事务边界，适配器负责打开与结束事务，模型调用永远位于事务之外。API 持久化任务，Worker 执行；解析状态与索引状态独立，引用验证后一次性发布回答。下列流程包含后续多资料对话的目标能力。
+单资料闭环见 [RAG 实现与验收](./rag-implementation.md)。`learning` 模块在此基础上实现集合、多资料范围、连续对话、反馈与 Quiz。API 在短事务中持久化任务，Worker 执行模型调用后以租约标识原子发布；解析状态与索引状态独立。回答引用和 Quiz 来源绑定不可变解析版本，阅读器允许定位历史版本。下列流程中流式返回和摘要仍是目标能力，目前使用轮询并传入同一范围最近的消息。
 
 ```text
 问题 + 对话摘要 + 资料范围

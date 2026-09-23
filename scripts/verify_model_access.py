@@ -20,10 +20,10 @@ async def main() -> None:
         failed = False
         try:
             vectors = await models.embed(["The median is robust against extreme outliers."])
-            print(f"Voyage OK: model={settings.voyage_model}, dimensions={len(vectors[0])}")
+            print(f"DashScope OK: model={settings.dashscope_model}, dimensions={len(vectors[0])}")
         except RagFailure as exc:
             failed = True
-            print(f"Voyage FAILED: {exc.code}: {FAILURES.get(exc.code, '模型检查失败')}")
+            print(f"DashScope FAILED: {exc.code}: {FAILURES.get(exc.code, '模型检查失败')}")
         try:
             source = Evidence(uuid4(), "The median is robust against extreme outliers.", 1, {})
             answer, usage = await models.answer(

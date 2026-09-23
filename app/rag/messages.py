@@ -13,4 +13,10 @@ FAILURES = {
     "ANSWER_INVALID": "回答未通过来源校验，请重新提问或缩小问题范围。",
     "INDEX_FAILED": "索引建立失败，请重试；已保存的向量会被复用。",
     "ANSWER_FAILED": "回答生成失败，请稍后重新提问。",
+    "SCOPE_NOT_READY": "资料范围已变化或索引不可用，请重新选择资料。",
+    "QUIZ_INVALID": "生成的题目未通过答案与来源校验，请调整范围后重试。",
+    "QUIZ_NO_EVIDENCE": "所选资料没有足够证据生成有效题目。",
+    "QUIZ_FAILED": "Quiz 生成失败，请稍后重试。",
+    "GRADING_INVALID": "简答评分结果无效，请稍后重试。",
+    "GRADING_FAILED": "简答评分失败，请稍后重试。",
 }

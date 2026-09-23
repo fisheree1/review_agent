@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import signal
 import sys
 import tempfile
 from pathlib import Path
@@ -50,12 +51,16 @@ class PypdfDocumentParser:
                 "PYTHONPATH": os.pathsep.join(path for path in sys.path if path),
                 "PYTHONUTF8": "1",
             },
+            start_new_session=True,
         )
         try:
             try:
                 await asyncio.wait_for(process.wait(), timeout=self._timeout_seconds)
             except TimeoutError as exc:
-                process.kill()
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
                 await process.wait()
                 raise DocumentProcessingError(
                     code="PDF_PARSE_TIMEOUT",

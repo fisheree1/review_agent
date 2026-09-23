@@ -168,12 +168,12 @@ describe("ReaderPage", () => {
       page_count: null,
       content_count: null,
       failure_code: "PDF_TEXT_NOT_FOUND",
-      failure_message: "没有提取到可阅读文字，这可能是一份扫描版 PDF。",
+      failure_message: "未识别到可阅读文字，请检查扫描质量",
     });
     renderReader();
 
     const alert = await screen.findByRole("alert");
-    expect(alert).toHaveTextContent("没有提取到可阅读文字");
+    expect(alert).toHaveTextContent("未识别到可阅读文字");
     expect(screen.getByRole("button", { name: /重新尝试/ })).toBeEnabled();
   });
 

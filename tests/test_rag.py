@@ -7,9 +7,9 @@ from uuid import uuid4
 
 import httpx
 import pytest
-from pydantic import SecretStr
+from pydantic import SecretStr, ValidationError
 
-from app.core.config import ModelSettings
+from app.core.config import ModelSettings, RagSettings
 from app.rag.application import RagProcessor
 from app.rag.domain import (
     Evidence,
@@ -65,21 +65,36 @@ def test_invalid_embedding_cannot_enter_index(vector: list[float]) -> None:
         validate_vectors([vector], 1)
 
 
-def test_provider_uses_correct_input_types_and_does_not_leak_error_body() -> None:
+def test_dashscope_provider_uses_correct_text_types_and_does_not_leak_error_body() -> None:
     requests: list[dict] = []
+    endpoint = (
+        "https://ws-test.cn-beijing.maas.aliyuncs.com"
+        "/api/v1/services/embeddings/text-embedding/text-embedding"
+    )
 
     def handle(request: httpx.Request) -> httpx.Response:
+        assert str(request.url) == endpoint
+        assert request.headers["Authorization"] == "Bearer test-only"
         payload = json.loads(request.content)
         requests.append(payload)
         if len(requests) == 3:
             return httpx.Response(
                 429, json={"error": "private key and document must not be logged"}
             )
-        return httpx.Response(200, json={"data": [{"index": 0, "embedding": [1.0] * 1024}]})
+        return httpx.Response(
+            200,
+            json={"output": {"embeddings": [{"text_index": 0, "embedding": [1.0] * 1024}]}},
+        )
 
     async def check() -> None:
         async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
-            provider = CloudModels(ModelSettings(voyage_api_key=SecretStr("test-only")), client)
+            provider = CloudModels(
+                ModelSettings(
+                    dashscope_api_key=SecretStr("test-only"),
+                    dashscope_embedding_url=endpoint,
+                ),
+                client,
+            )
             await provider.embed(["Document"])
             await provider.embed(["Question"], query=True)
             with pytest.raises(RagFailure) as failure:
@@ -88,9 +103,89 @@ def test_provider_uses_correct_input_types_and_does_not_leak_error_body() -> Non
             assert "private key" not in str(failure.value)
 
     asyncio.run(check())
-    assert [request["input_type"] for request in requests[:2]] == ["document", "query"]
-    assert requests[0]["output_dimension"] == 1024
+    assert [request["parameters"]["text_type"] for request in requests[:2]] == [
+        "document",
+        "query",
+    ]
+    assert requests[0]["model"] == "qwen3.7-text-embedding"
+    assert requests[0]["input"] == {"texts": ["Document"]}
+    assert requests[0]["parameters"]["dimension"] == 1024
     assert len(requests) == 3
+
+
+def test_dashscope_url_is_restricted_and_new_profile_does_not_reuse_voyage_vectors() -> None:
+    with pytest.raises(ValidationError):
+        ModelSettings(dashscope_embedding_url="https://example.com/embeddings")
+    assert RagSettings().profile.startswith("dashscope:qwen3.7-text-embedding:1024:")
+
+
+def test_dashscope_embedding_rejects_missing_and_duplicate_indexes() -> None:
+    endpoint = (
+        "https://ws-test.cn-beijing.maas.aliyuncs.com"
+        "/api/v1/services/embeddings/text-embedding/text-embedding"
+    )
+
+    def handle(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "output": {
+                    "embeddings": [
+                        {"text_index": 0, "embedding": [1.0] * 1024},
+                        {"text_index": 0, "embedding": [1.0] * 1024},
+                    ]
+                }
+            },
+        )
+
+    async def check() -> None:
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
+            provider = CloudModels(
+                ModelSettings(
+                    dashscope_api_key=SecretStr("test-only"),
+                    dashscope_embedding_url=endpoint,
+                ),
+                client,
+            )
+            with pytest.raises(RagFailure) as failure:
+                await provider.embed(["first", "second"])
+            assert failure.value.code == "EMBEDDING_INVALID"
+
+    asyncio.run(check())
+
+
+def test_dashscope_batch_vectors_follow_input_order() -> None:
+    endpoint = (
+        "https://ws-test.cn-beijing.maas.aliyuncs.com"
+        "/api/v1/services/embeddings/text-embedding/text-embedding"
+    )
+
+    def handle(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "output": {
+                    "embeddings": [
+                        {"text_index": 1, "embedding": [2.0] * 1024},
+                        {"text_index": 0, "embedding": [1.0] * 1024},
+                    ]
+                }
+            },
+        )
+
+    async def check() -> None:
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
+            provider = CloudModels(
+                ModelSettings(
+                    dashscope_api_key=SecretStr("test-only"),
+                    dashscope_embedding_url=endpoint,
+                ),
+                client,
+            )
+            vectors = await provider.embed(["first", "second"])
+            assert [vector[0] for vector in vectors] == [1.0, 2.0]
+
+    asyncio.run(check())
 
 
 def test_cancelled_question_never_calls_generation_and_invalid_answer_fails() -> None:

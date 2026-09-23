@@ -127,11 +127,13 @@ async def get_document_content(
     principal: Annotated[Principal, Depends(get_current_principal)],
     service: Annotated[DocumentService, Depends(get_document_service)],
     ordinal: Annotated[int, Query(ge=1)] = 1,
+    version_id: Annotated[int | None, Query(ge=1)] = None,
 ) -> DocumentContentResponse:
     result = await service.content(
         workspace_public_id=principal.workspace_public_id,
         document_public_id=document_id,
         ordinal=ordinal,
+        version_id=version_id,
     )
     return DocumentContentResponse(
         document_id=document_id,

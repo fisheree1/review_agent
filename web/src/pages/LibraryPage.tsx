@@ -1,5 +1,3 @@
-import { useNavigate } from "react-router-dom";
-
 import { AppHeader } from "../components/AppHeader";
 import { DocumentList } from "../components/DocumentList";
 import { ErrorState } from "../components/ErrorState";
@@ -7,14 +5,13 @@ import { UploadPanel } from "../components/UploadPanel";
 import { useDocuments } from "../hooks/useDocuments";
 
 export function LibraryPage() {
-  const navigate = useNavigate();
   const { documents, error, isLoading, isLoadingMore, nextCursor, refresh, loadMore } = useDocuments();
 
   return (
     <div className="app-page">
       <AppHeader />
       <main className="library" id="main-content">
-        <UploadPanel onUploaded={(documentId) => navigate(`/documents/${documentId}`)} />
+        <UploadPanel onUploaded={() => void refresh()} />
         <section aria-labelledby="library-title" className="library-section">
           <div className="section-heading">
             <div>

@@ -168,6 +168,7 @@ class UploadRepository:
         document_public_id: UUID,
         start_ordinal: int,
         limit: int,
+        version_id: int | None = None,
     ) -> tuple[DocumentContent, ...]:
         self.requested_content.append((start_ordinal, limit))
         return (
@@ -186,6 +187,7 @@ class UploadRepository:
         *,
         workspace_public_id: UUID,
         document_public_id: UUID,
+        version_id: int | None = None,
     ) -> tuple[DocumentContentLocation, ...]:
         return (
             DocumentContentLocation(

@@ -132,6 +132,18 @@ button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible
 .error-state .button { margin-top: 18px; }
 .load-more { display: flex; justify-content: center; padding-top: 24px; }
 .inline-notice { margin-top: 16px; color: var(--danger); font-size: 13px; text-align: center; }
+.auth-screen { display: grid; min-height: 100vh; place-items: center; padding: 28px; }
+.auth-card { width: min(100%, 430px); padding: 36px; border: 1px solid var(--line); border-radius: 20px; background: var(--surface); box-shadow: var(--shadow-sm); }
+.auth-card h1, .account-page h1 { margin: 10px 0; font-size: 30px; }
+.auth-card > p, .account-page p { color: var(--text-soft); line-height: 1.6; }
+.auth-card form, .account-password form { display: grid; gap: 10px; margin-top: 28px; }
+.auth-card label, .account-password label { font-weight: 650; font-size: 13px; }
+.auth-card input, .account-password input { width: 100%; min-height: 44px; padding: 10px 12px; border: 1px solid var(--line-strong); border-radius: 9px; background: var(--surface); color: var(--text); }
+.auth-card form .button, .account-password form .button { margin-top: 12px; }
+.auth-hint { margin: 0; color: var(--text-soft); font-size: 12px; }
+.auth-switch { margin-top: 22px; padding: 0; border: 0; background: transparent; color: var(--accent); cursor: pointer; }
+.account-page { width: min(720px, calc(100% - 40px)); margin: 60px auto 100px; }
+.account-password { margin-top: 48px; padding-top: 24px; border-top: 1px solid var(--line); }
 
 .reader-page { min-height: 100vh; }
 .reader-settings { display: flex; align-items: center; height: 38px; overflow: hidden; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
@@ -290,3 +302,69 @@ kbd { display: inline-grid; min-width: 24px; min-height: 24px; place-items: cent
 @media (max-width: 767px) { .question-panel { padding: 1rem; } }
 @media (max-width: 560px) { .question-sidebar .question-panel { padding: 18px; } }
 @keyframes sidebar-enter { from { opacity: 0; transform: translateX(12px); } to { opacity: 1; transform: translateX(0); } }
+
+.primary-nav { display: flex; align-items: center; gap: 14px; margin-left: 20px; }
+.primary-nav a { padding: 8px 4px; color: var(--text-soft); font-size: 13px; font-weight: 650; text-decoration: none; white-space: nowrap; }
+.primary-nav a:hover, .primary-nav a[aria-current="page"] { color: var(--accent); }
+.learning-page { width: min(1200px, calc(100% - 40px)); margin: 0 auto; padding: 42px 0 90px; }
+.learning-page--narrow { width: min(760px, calc(100% - 32px)); }
+.learning-heading { margin: 0 0 28px; }
+.learning-heading h1 { margin: 9px 0; font-size: clamp(30px, 4vw, 46px); letter-spacing: -0.03em; }
+.learning-heading p { max-width: 70ch; color: var(--text-soft); line-height: 1.7; }
+.learning-grid { display: grid; grid-template-columns: minmax(230px, 300px) minmax(0, 1fr); align-items: start; gap: 24px; }
+.learning-sidebar, .learning-content { display: grid; gap: 18px; min-width: 0; }
+.learning-card { min-width: 0; padding: 24px; border: 1px solid var(--line); border-radius: 18px; background: var(--surface); box-shadow: var(--shadow-sm); overflow-wrap: anywhere; }
+.learning-card h2 { margin: 0 0 14px; font-size: 20px; }
+.learning-card h3 { margin: 12px 0; font-size: 16px; }
+.learning-card p { line-height: 1.7; }
+.learning-card form { display: grid; gap: 12px; }
+.learning-card form > label, .learning-card label[for] { font-weight: 650; }
+.learning-card input:not([type="checkbox"]):not([type="radio"]), .learning-card textarea, .learning-card select { width: 100%; min-width: 0; padding: 10px 12px; border: 1px solid var(--line-strong); border-radius: 9px; background: var(--surface); color: var(--text); font: inherit; }
+.learning-card textarea { resize: vertical; }
+.learning-card form > button { justify-self: start; }
+.learning-sidebar nav { display: grid; gap: 8px; }
+.learning-sidebar nav a { display: block; padding: 8px 10px; border-radius: 8px; color: var(--accent); text-decoration: none; }
+.learning-sidebar nav a:hover, .learning-sidebar nav a[aria-current="page"] { background: var(--accent-soft); }
+.learning-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 14px; }
+.learning-scope { color: var(--text-soft); font-size: 13px; }
+.learning-messages { margin: 22px 0; border-top: 1px solid var(--line); }
+.learning-message { padding: 18px 0; border-bottom: 1px solid var(--line); }
+.learning-message h3 { margin-top: 0; }
+.learning-message a, .quiz-review a { color: var(--accent); }
+.learning-quote { display: block; margin: 6px 0 12px; padding: 10px 14px; border-left: 3px solid var(--accent); background: var(--surface-soft); color: var(--text-soft); font-size: 13px; line-height: 1.65; }
+.scope-picker, .quiz-settings { min-width: 0; margin: 8px 0; padding: 14px; border: 1px solid var(--line); border-radius: 11px; }
+.scope-picker legend, .quiz-settings legend { padding: 0 5px; font-weight: 680; }
+.scope-picker p { margin: 0 0 10px; color: var(--text-soft); font-size: 13px; }
+.scope-picker__items { display: grid; gap: 8px; margin: 10px 0; }
+.scope-picker__items label, .quiz-option { display: flex; align-items: start; gap: 8px; line-height: 1.5; cursor: pointer; }
+.scope-picker__items input, .quiz-option input { width: auto; margin-top: 4px; accent-color: var(--accent); }
+.quiz-settings label { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 8px 0; }
+.quiz-settings input[type="number"] { max-width: 80px; }
+.quiz-question { margin: 18px 0; }
+.quiz-question fieldset { margin: 14px 0; padding: 12px; border: 1px solid var(--line); border-radius: 10px; }
+.quiz-option { margin: 10px 0; }
+.quiz-review { margin-top: 18px; padding-top: 12px; border-top: 1px solid var(--line); }
+@media (max-width: 760px) { .learning-grid { grid-template-columns: 1fr; } .learning-page { width: min(100% - 28px, 680px); padding-top: 28px; } }
+@media (max-width: 560px) { .primary-nav { gap: 6px; margin-left: 6px; } .primary-nav a { font-size: 11px; } .learning-card { padding: 18px; } }
+.upload-file-list {
+  display: grid;
+  gap: 0.65rem;
+  list-style: none;
+  margin: 1rem 0 0;
+  padding: 0;
+  text-align: left;
+  width: 100%;
+}
+
+.upload-file-list li {
+  align-items: center;
+  border: 1px solid var(--border, #d7d7d7);
+  border-radius: 0.6rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+  padding: 0.65rem 0.8rem;
+}
+
+.upload-file-list li strong { overflow-wrap: anywhere; }
+.upload-file-list li progress { flex-basis: 100%; }
