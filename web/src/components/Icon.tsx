@@ -2,6 +2,7 @@ import type { SVGProps } from "react";
 
 export type IconName =
   | "book"
+  | "chat"
   | "chevronLeft"
   | "chevronRight"
   | "close"
@@ -19,6 +20,7 @@ export type IconName =
 
 const paths: Record<IconName, React.ReactNode> = {
   book: <><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" /><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2Z" /></>,
+  chat: <><path d="M20 11.5a8.5 8.5 0 0 1-8.5 8.5 9 9 0 0 1-3.6-.8L4 20l.8-3.9A8.5 8.5 0 1 1 20 11.5Z" /><path d="M8 11.5h8" /><path d="M8 14.5h5" /></>,
   chevronLeft: <path d="m15 18-6-6 6-6" />,
   chevronRight: <path d="m9 18 6-6-6-6" />,
   close: <><path d="m18 6-12 12" /><path d="m6 6 12 12" /></>,

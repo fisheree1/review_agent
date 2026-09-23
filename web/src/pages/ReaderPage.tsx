@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 
@@ -44,6 +44,14 @@ function isInteractiveTarget(target: EventTarget | null): boolean {
   return target instanceof HTMLElement && Boolean(target.closest("button, a, input, select, textarea, [contenteditable='true']"));
 }
 
+type SidePanel = "questions" | "references" | null;
+
+function highlightedParagraph(paragraph: string, quote: string | null): ReactNode {
+  const match = quote ? paragraph.indexOf(quote) : -1;
+  if (match < 0 || !quote) return paragraph;
+  return <>{paragraph.slice(0, match)}<mark className="reading-page__highlight" data-citation-highlight>{quote}</mark>{paragraph.slice(match + quote.length)}</>;
+}
+
 export function ReaderPage() {
   const { documentId = "" } = useParams();
   const navigate = useNavigate();
@@ -51,23 +59,67 @@ export function ReaderPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const { documents } = useDocuments();
   const [isNavOpen, setIsNavOpen] = useState(false);
-  const [isReferencesOpen, setIsReferencesOpen] = useState(
-    () => window.matchMedia("(min-width: 1100px)").matches,
-  );
+  const [isCompact, setIsCompact] = useState(() => window.matchMedia("(max-width: 1099px)").matches);
+  const [activePanel, setActivePanel] = useState<SidePanel>(() => window.matchMedia("(min-width: 1100px)").matches ? "references" : null);
   const [isShortcutsOpen, setIsShortcutsOpen] = useState(false);
   const [isDeleteOpen, setIsDeleteOpen] = useState(false);
   const [isQuestionsOpen, setIsQuestionsOpen] = useState(false);
+  const [hasOpenedQuestions, setHasOpenedQuestions] = useState(false);
   const [answerCitation, setAnswerCitation] = useState<Citation | null>(null);
+  const [highlightedCitation, setHighlightedCitation] = useState<Citation | null>(null);
   const [fontSize, setFontSize] = useState(storedFontSize);
   const [readingWidth, setReadingWidth] = useState<ReadingWidth>(storedReadingWidth);
   const navRef = useRef<HTMLElement>(null);
+  const questionRef = useRef<HTMLElement>(null);
+  const readingPositionRef = useRef<{ unit: number; top: number } | null>(null);
+  const pendingRestoreRef = useRef<{ unit: number; top: number } | null>(null);
+  const previousPanelRef = useRef<SidePanel>(null);
+  const pendingFocusRef = useRef(false);
   const closeNav = useCallback(() => setIsNavOpen(false), []);
-  const closeReferences = useCallback(() => setIsReferencesOpen(false), []);
+  const closeReferences = useCallback(() => setActivePanel(isQuestionsOpen ? "questions" : null), [isQuestionsOpen]);
   useFocusTrap(navRef, isNavOpen, closeNav);
   const requestedOrdinal = Number(searchParams.get("unit") ?? searchParams.get("page"));
   const currentOrdinal = Number.isInteger(requestedOrdinal) && requestedOrdinal > 0
     ? requestedOrdinal
     : 1;
+  const closeQuestions = useCallback(() => {
+    setIsQuestionsOpen(false);
+    setActivePanel(previousPanelRef.current);
+    setHighlightedCitation(null);
+    const position = readingPositionRef.current;
+    readingPositionRef.current = null;
+    if (!position) return;
+    pendingRestoreRef.current = position;
+    if (currentOrdinal !== position.unit) {
+      setSearchParams({ unit: String(position.unit) }, { replace: true });
+    } else {
+      window.requestAnimationFrame(() => {
+        window.scrollTo(0, position.top);
+        pendingRestoreRef.current = null;
+      });
+    }
+  }, [currentOrdinal, setSearchParams]);
+  useFocusTrap(questionRef, isCompact && activePanel === "questions", closeQuestions);
+  const openQuestions = useCallback(() => {
+    if (!isQuestionsOpen) {
+      previousPanelRef.current = activePanel;
+      const position = { unit: currentOrdinal, top: window.scrollY };
+      readingPositionRef.current = position;
+      setIsQuestionsOpen(true);
+      setHasOpenedQuestions(true);
+      window.requestAnimationFrame(() => window.scrollTo(0, position.top));
+    }
+    setActivePanel("questions");
+  }, [activePanel, currentOrdinal, isQuestionsOpen]);
+  useEffect(() => {
+    const media = window.matchMedia("(max-width: 1099px)");
+    const update = () => setIsCompact(media.matches);
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, []);
+  useEffect(() => {
+    if (activePanel === "questions") questionRef.current?.querySelector("textarea")?.focus({ preventScroll: true });
+  }, [activePanel]);
   const documentQuery = useQuery({
     queryKey: ["documents", documentId],
     queryFn: () => getDocument(documentId),
@@ -98,7 +150,15 @@ export function ReaderPage() {
     },
   });
   const document = documentQuery.data ?? null;
-  useEffect(() => { setAnswerCitation(null); setIsQuestionsOpen(false); }, [documentId]);
+  useEffect(() => {
+    setAnswerCitation(null);
+    setHighlightedCitation(null);
+    setIsQuestionsOpen(false);
+    setHasOpenedQuestions(false);
+    readingPositionRef.current = null;
+    pendingRestoreRef.current = null;
+    setActivePanel(window.matchMedia("(min-width: 1100px)").matches ? "references" : null);
+  }, [documentId]);
   const contents = contentQuery.data?.contents ?? [];
   const contentCount = document?.content_count ?? contentQuery.data?.content_count ?? 0;
   const error = documentQuery.error ?? contentQuery.error ?? retryMutation.error;
@@ -119,44 +179,81 @@ export function ReaderPage() {
       setSearchParams({ unit: String(boundedOrdinal) }, { replace: true });
       return;
     }
+    if (!contentQuery.data?.contents.some((content) => content.ordinal === boundedOrdinal)) return;
     window.requestAnimationFrame(() => {
-      window.document.getElementById(`content-${boundedOrdinal}`)?.scrollIntoView({ block: "start" });
+      const restore = pendingRestoreRef.current;
+      if (restore?.unit === boundedOrdinal) {
+        window.scrollTo(0, restore.top);
+        pendingRestoreRef.current = null;
+        window.document.getElementById(`content-${boundedOrdinal}`)?.focus({ preventScroll: true });
+        pendingFocusRef.current = false;
+        return;
+      }
+      const source = window.document.getElementById(`content-${boundedOrdinal}`);
+      const highlight = source?.querySelector<HTMLElement>("[data-citation-highlight]");
+      (highlight ?? source)?.scrollIntoView({ block: "start", behavior: pendingFocusRef.current ? "smooth" : "instant" });
+      if (pendingFocusRef.current) source?.focus({ preventScroll: true });
+      pendingFocusRef.current = false;
     });
-  }, [contentCount, currentOrdinal, searchParams, setSearchParams]);
+  }, [contentCount, contentQuery.data, currentOrdinal, highlightedCitation, searchParams, setSearchParams]);
 
   const selectContent = useCallback((ordinal: number) => {
     const bounded = Math.min(Math.max(ordinal, 1), Math.max(contentCount, 1));
+    setHighlightedCitation(null);
+    pendingFocusRef.current = true;
     setSearchParams({ unit: String(bounded) }, { replace: true });
-    window.requestAnimationFrame(() => {
-      const target = window.document.getElementById(`content-${bounded}`);
-      target?.scrollIntoView({ behavior: "smooth", block: "start" });
-      target?.focus({ preventScroll: true });
-    });
-  }, [contentCount, setSearchParams]);
+    if (bounded === currentOrdinal) {
+      window.requestAnimationFrame(() => {
+        const source = window.document.getElementById(`content-${bounded}`);
+        source?.scrollIntoView({ behavior: "smooth", block: "start" });
+        source?.focus({ preventScroll: true });
+        pendingFocusRef.current = false;
+      });
+    }
+  }, [contentCount, currentOrdinal, setSearchParams]);
+
+  const openCitation = useCallback((citation: Citation) => {
+    setHighlightedCitation(citation);
+    pendingFocusRef.current = true;
+    setSearchParams({ unit: String(citation.unit) }, { replace: true });
+    if (citation.unit === currentOrdinal) {
+      window.requestAnimationFrame(() => {
+        const source = window.document.getElementById(`content-${citation.unit}`);
+        (source?.querySelector<HTMLElement>("[data-citation-highlight]") ?? source)?.scrollIntoView({ behavior: "smooth", block: "start" });
+        source?.focus({ preventScroll: true });
+        pendingFocusRef.current = false;
+      });
+    }
+    if (isCompact) setActivePanel(null);
+  }, [currentOrdinal, isCompact, setSearchParams]);
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
+      if (event.defaultPrevented) return;
+      if (event.key === "Escape") {
+        if (activePanel === "references") closeReferences();
+        else if (activePanel === "questions") closeQuestions();
+        else closeNav();
+        return;
+      }
       if (isInteractiveTarget(event.target)) return;
       if (event.key === "?") {
         event.preventDefault();
         setIsShortcutsOpen(true);
       } else if (event.key.toLowerCase() === "r") {
         event.preventDefault();
-        setIsReferencesOpen((value) => !value);
+        setActivePanel((value) => value === "references" ? (isQuestionsOpen ? "questions" : null) : "references");
       } else if (event.key === "[") {
         event.preventDefault();
         selectContent(currentOrdinal - 1);
       } else if (event.key === "]") {
         event.preventDefault();
         selectContent(currentOrdinal + 1);
-      } else if (event.key === "Escape") {
-        closeNav();
-        closeReferences();
       }
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [closeNav, closeReferences, currentOrdinal, selectContent]);
+  }, [activePanel, closeNav, closeQuestions, closeReferences, currentOrdinal, isQuestionsOpen, selectContent]);
 
   const selectedReference = useMemo(
     () => contents.find((content) => content.ordinal === currentOrdinal),
@@ -172,18 +269,27 @@ export function ReaderPage() {
           onReadingWidthChange={setReadingWidth}
           readingWidth={readingWidth}
         />
+        {document?.status === "ready" ? <button
+          aria-controls={hasOpenedQuestions ? "reader-questions" : undefined}
+          aria-expanded={activePanel === "questions"}
+          aria-label={activePanel === "questions" ? "收起资料问答" : "打开资料问答"}
+          className="icon-button"
+          onClick={() => activePanel === "questions" ? closeQuestions() : openQuestions()}
+          title="资料问答"
+          type="button"
+        ><Icon name="chat" /></button> : null}
         <button aria-label="查看阅读快捷键" className="icon-button" onClick={() => setIsShortcutsOpen(true)} title="阅读快捷键" type="button"><Icon name="help" /></button>
         <button
-          aria-expanded={isReferencesOpen}
+          aria-expanded={activePanel === "references"}
           aria-label="切换引用面板"
           className="icon-button"
-          onClick={() => setIsReferencesOpen((value) => !value)}
+          onClick={() => setActivePanel((value) => value === "references" ? (isQuestionsOpen ? "questions" : null) : "references")}
           title="切换引用面板 (R)"
           type="button"
         ><Icon name="panel" /></button>
       </AppHeader>
 
-      <div className={`reader-shell${isReferencesOpen ? " reader-shell--with-references" : ""}`}>
+      <div className={`reader-shell${activePanel ? " reader-shell--with-sidebar" : ""}`}>
         {isNavOpen ? <button aria-label="关闭资料导航" className="scrim" onClick={closeNav} type="button" /> : null}
         <aside
           aria-label="资料导航"
@@ -244,17 +350,16 @@ export function ReaderPage() {
                 <span className="eyebrow">{contentCountLabel(document)} · {documentTypeLabel(document.media_type)}</span>
                 <h1>{document.filename}</h1>
                 <p>正文保留原始来源位置。使用 <kbd>[</kbd> 与 <kbd>]</kbd> 可以前后移动。</p>
-                <button aria-expanded={isQuestionsOpen} className="button button--secondary" onClick={() => setIsQuestionsOpen((value) => !value)} type="button">{isQuestionsOpen ? "收起资料问答" : "基于此资料提问"}</button>
+                <button aria-controls={hasOpenedQuestions ? "reader-questions" : undefined} aria-expanded={activePanel === "questions"} className="button button--secondary" onClick={() => activePanel === "questions" ? closeQuestions() : openQuestions()} type="button">{activePanel === "questions" ? "收起资料问答" : isQuestionsOpen ? "返回资料问答" : "基于此资料提问"}</button>
                 <button className="button button--danger-quiet document-reader__delete" onClick={() => setIsDeleteOpen(true)} type="button">
                   删除资料
                 </button>
               </header>
-              {isQuestionsOpen ? <QuestionPanel documentId={documentId} filename={document.filename} key={documentId} onCitation={(citation) => { setAnswerCitation(citation); setIsReferencesOpen(true); }} /> : null}
               <div className="page-stack">
                 {contents.map((content) => (
                   <section
                     aria-label={citationLabel(content.citation_locator)}
-                    className={`reading-page${content.ordinal === currentOrdinal ? " reading-page--current" : ""}`}
+                    className={`reading-page${content.ordinal === currentOrdinal ? " reading-page--current" : ""}${highlightedCitation?.unit === content.ordinal ? " reading-page--cited" : ""}`}
                     id={`content-${content.ordinal}`}
                     key={content.ordinal}
                     onClick={() => setSearchParams({ unit: String(content.ordinal) }, { replace: true })}
@@ -266,7 +371,7 @@ export function ReaderPage() {
                     </div>
                     <div className="reading-page__content">
                       {content.content.split(/\n{2,}/).map((paragraph, index) => (
-                        paragraph.trim() ? <p key={`${content.ordinal}-${index}`}>{paragraph.trim()}</p> : null
+                        paragraph.trim() ? <p key={`${content.ordinal}-${index}`}>{highlightedParagraph(paragraph.trim(), highlightedCitation?.unit === content.ordinal ? highlightedCitation.quote : null)}</p> : null
                       ))}
                     </div>
                   </section>
@@ -276,12 +381,32 @@ export function ReaderPage() {
           ) : null}
         </main>
 
+        {hasOpenedQuestions && document?.status === "ready" ? (
+          <aside
+            aria-label="资料问答"
+            aria-modal={isCompact && activePanel === "questions" || undefined}
+            className={`question-sidebar${activePanel === "questions" ? " question-sidebar--open" : ""}`}
+            hidden={activePanel !== "questions"}
+            id="reader-questions"
+            ref={questionRef}
+            role={isCompact && activePanel === "questions" ? "dialog" : undefined}
+          >
+            <div className="question-sidebar__header">
+              <span className="eyebrow">资料问答</span>
+              <button aria-label="收起资料问答" className="icon-button" onClick={closeQuestions} type="button"><Icon name="close" /></button>
+            </div>
+            <QuestionPanel documentId={documentId} filename={document.filename} key={documentId} onCitation={(citation) => { setAnswerCitation(citation); setActivePanel("references"); }} />
+          </aside>
+        ) : null}
+
         <ReferencePanel
           answerCitation={answerCitation}
           currentOrdinal={currentOrdinal}
-          isOpen={isReferencesOpen}
+          isCompact={isCompact}
+          isOpen={activePanel === "references"}
           onClose={closeReferences}
-          onSelect={(ordinal) => { selectContent(ordinal); if (window.innerWidth < 1100) setIsReferencesOpen(false); }}
+          onOpenCitation={openCitation}
+          onSelect={(ordinal) => { selectContent(ordinal); if (isCompact) setActivePanel(null); }}
           contentCount={contentCount}
           contents={contents}
           locations={contentQuery.data?.locations ?? []}

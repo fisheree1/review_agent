@@ -62,7 +62,7 @@ export function QuestionPanel({ documentId, filename, onCitation }: Props) {
       {error ? <ErrorState message={error.message} onRetry={() => void refresh()} /> : null}
       <form onSubmit={(event) => { event.preventDefault(); if (question.trim().length >= 2 && !busy) asking.mutate(question.trim()); }}>
         <label htmlFor="rag-question">你想了解这份资料的什么内容？</label>
-        <textarea autoFocus id="rag-question" maxLength={2000} onChange={(event) => setQuestion(event.target.value)} placeholder="例如：这份资料如何解释缺失值处理？" rows={3} value={question} />
+        <textarea id="rag-question" maxLength={2000} onChange={(event) => setQuestion(event.target.value)} placeholder="例如：这份资料如何解释缺失值处理？" rows={3} value={question} />
         <button className="button button--primary" disabled={index.data?.status !== "ready" || busy || question.trim().length < 2} type="submit">{asking.isPending ? "正在提交…" : "提问"}</button>
       </form>
       <div aria-live="polite" aria-atomic="false">

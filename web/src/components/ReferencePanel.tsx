@@ -9,11 +9,13 @@ import { Icon } from "./Icon";
 interface ReferencePanelProps {
   answerCitation?: Citation | null;
   currentOrdinal: number;
+  isCompact: boolean;
   isOpen: boolean;
   contentCount: number;
   contents: DocumentContent[];
   locations: DocumentContentLocation[];
   onClose: () => void;
+  onOpenCitation: (citation: Citation) => void;
   onSelect: (ordinal: number) => void;
 }
 
@@ -25,11 +27,13 @@ function excerpt(content: string): string {
 export function ReferencePanel({
   answerCitation,
   currentOrdinal,
+  isCompact,
   isOpen,
   contentCount,
   contents,
   locations,
   onClose,
+  onOpenCitation,
   onSelect,
 }: ReferencePanelProps) {
   const current = contents.find((content) => content.ordinal === currentOrdinal);
@@ -37,7 +41,7 @@ export function ReferencePanel({
   const onCloseRef = useRef(onClose);
   useEffect(() => { onCloseRef.current = onClose; }, [onClose]);
   const close = useCallback(() => onCloseRef.current(), []);
-  const isModal = isOpen && window.matchMedia("(max-width: 1099px)").matches;
+  const isModal = isOpen && isCompact;
   useFocusTrap(panelRef, isModal, close);
   return (
     <aside
@@ -54,7 +58,7 @@ export function ReferencePanel({
       {answerCitation ? <section className="citation-preview" aria-label="回答引用原文">
         <h3>{citationLabel(answerCitation.locator)}</h3>
         <blockquote>{answerCitation.quote}</blockquote>
-        <button className="button button--secondary" onClick={() => onSelect(answerCitation.unit)} type="button">在原文中打开</button>
+        <button className="button button--secondary" onClick={() => onOpenCitation(answerCitation)} type="button">在原文中打开</button>
       </section> : null}
       <p className="reference-panel__intro">
         {current ? `${citationLabel(current.citation_locator)}：${excerpt(current.content)}` : "选择一个来源位置查看正文。"}
