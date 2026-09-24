@@ -37,11 +37,12 @@ async def run_worker_heartbeat(
                 )
                 await session.execute(statement)
                 await session.commit()
-        except Exception:
-            logger.exception(
-                "worker_heartbeat_failed worker_id=%s worker_type=%s",
+        except Exception as exc:
+            logger.error(
+                "worker_heartbeat_failed worker_id=%s worker_type=%s error_type=%s",
                 worker_id,
                 worker_type,
+                type(exc).__name__,
             )
 
         try:

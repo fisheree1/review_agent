@@ -85,11 +85,13 @@ class DocumentJobProcessor:
                 code="SOURCE_FILE_UNAVAILABLE",
                 message="无法读取已保存的原文件，请重新上传",
             )
-        except Exception:
-            logger.exception(
-                "document_job_failed job_id=%s document_id=%s code=DOCUMENT_PROCESSING_FAILED",
+        except Exception as exc:
+            logger.error(
+                "document_job_failed job_id=%s document_id=%s "
+                "code=DOCUMENT_PROCESSING_FAILED error_type=%s",
                 job.public_id,
                 job.document_public_id,
+                type(exc).__name__,
             )
             await self._fail(
                 job=job,

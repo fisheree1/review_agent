@@ -25,7 +25,7 @@ docker compose exec -T api python -m scripts.verify_runtime_database_access
 
 可单独执行 `docker compose exec -T worker python -m scripts.verify_model_access` 检查两个服务。此命令各发一个短合成文本请求，可能消耗额度，只输出服务状态、维度与生成 Token 数，不输出密钥或正文。普通测试不调用真实 API。
 
-若只想确认 `qwen3.7-text-embedding` 是否可调用，可在项目根目录运行 `uv run python -m scripts.test_dashscope_api`；它从本地 `.env` 读取密钥，发送一段合成文本，验证返回 1024 维向量。更完整的付费质量检查需在仓库根目录本机运行 `uv run python -m scripts.evaluate_rag`（容器镜像不打包 `evals/`）；它使用 `evals/rag-v1.json` 中的合成资料，检查预期来源召回、拒答和提示注入不被引用；遇到限流时稍后重试。两项检查都不会读取私人资料。
+若只想确认 `qwen3.7-text-embedding` 是否可调用，可在项目根目录运行 `uv run python -m scripts.verify_model_access --embedding-only`；它从本地 `.env` 读取密钥，发送一段合成文本，验证返回 1024 维向量。更完整的付费质量检查需在仓库根目录本机运行 `uv run python -m scripts.evaluate_rag`（容器镜像不打包 `evals/`）；它使用 `evals/rag-v1.json` 中的合成资料，检查预期来源召回、拒答和提示注入不被引用；遇到限流时稍后重试。两项检查都不会读取私人资料。
 
 ## 当前技术决策
 

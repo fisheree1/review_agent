@@ -12,6 +12,8 @@ from app.auth.api import router as auth_router
 from app.core.config import get_settings
 from app.core.database import close_database, get_db_session, verify_runtime_database_role
 from app.core.errors import ApplicationError
+from app.core.observability import record_request
+from app.core.rate_limit import get_rate_limiter
 from app.core.request_limits import RequestBodyLimitMiddleware
 from app.documents.api import router as documents_router
 from app.jobs.models import WorkerHeartbeatModel
@@ -25,6 +27,11 @@ settings = get_settings()
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     await verify_runtime_database_role()
     yield
+    if get_rate_limiter.cache_info().currsize:
+        limiter = get_rate_limiter()
+        if limiter is not None:
+            await limiter.close()
+        get_rate_limiter.cache_clear()
     await close_database()
 
 
@@ -32,7 +39,11 @@ app = FastAPI(
     title=settings.app_name,
     version=settings.app_version,
     lifespan=lifespan,
+    docs_url=None if settings.app_env == "production" else "/docs",
+    redoc_url=None if settings.app_env == "production" else "/redoc",
+    openapi_url=None if settings.app_env == "production" else "/openapi.json",
 )
+app.middleware("http")(record_request)
 app.add_middleware(
     RequestBodyLimitMiddleware,
     path="/api/v1/documents",
@@ -53,7 +64,7 @@ app.add_middleware(RequestBodyLimitMiddleware, path="/api/v1/auth/", max_bytes=4
 
 
 @app.exception_handler(ApplicationError)
-async def application_error_handler(_: Request, exc: ApplicationError) -> JSONResponse:
+async def application_error_handler(request: Request, exc: ApplicationError) -> JSONResponse:
     headers = {"WWW-Authenticate": "Bearer"} if exc.status_code == 401 else None
     return JSONResponse(
         status_code=exc.status_code,
@@ -61,6 +72,7 @@ async def application_error_handler(_: Request, exc: ApplicationError) -> JSONRe
             "error": {
                 "code": exc.code,
                 "message": exc.message,
+                "request_id": request.state.request_id,
                 "details": exc.details,
             }
         },
@@ -70,11 +82,10 @@ async def application_error_handler(_: Request, exc: ApplicationError) -> JSONRe
 
 @app.get("/", tags=["system"])
 async def root() -> dict[str, str]:
-    return {
-        "name": settings.app_name,
-        "version": settings.app_version,
-        "docs": "/docs",
-    }
+    result = {"name": settings.app_name, "version": settings.app_version}
+    if settings.app_env == "development":
+        result["docs"] = "/docs"
+    return result
 
 
 @app.get("/health/live", tags=["health"])

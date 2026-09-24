@@ -1,6 +1,8 @@
 """Add scoped collections, conversations, feedback, and quiz records."""
 
 from collections.abc import Sequence
+from datetime import datetime
+from uuid import UUID as UUIDValue
 
 import sqlalchemy as sa
 from alembic import op
@@ -18,7 +20,7 @@ def pk() -> sa.Column[int]:
     return sa.Column("id", sa.BigInteger(), sa.Identity(), primary_key=True)
 
 
-def public_id() -> sa.Column[UUID]:
+def public_id() -> sa.Column[UUIDValue]:
     return sa.Column("public_id", UUID(), nullable=False, unique=True)
 
 
@@ -26,7 +28,7 @@ def workspace() -> sa.Column[int]:
     return sa.Column("workspace_id", sa.BigInteger(), nullable=False)
 
 
-def created() -> sa.Column[object]:
+def created() -> sa.Column[datetime]:
     return sa.Column(
         "created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
     )

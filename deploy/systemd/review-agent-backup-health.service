@@ -1,0 +1,9 @@
+[Unit]
+Description=Review Agent backup freshness check
+
+[Service]
+Type=oneshot
+User=root
+EnvironmentFile=/etc/review-agent/backup.env
+WorkingDirectory=/opt/review-agent
+ExecStart=/usr/bin/python3 /opt/review-agent/scripts/check_backup_freshness.py --max-age-hours 18

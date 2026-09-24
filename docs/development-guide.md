@@ -171,13 +171,17 @@ docker compose ps
 
 已有早期 `.env` 时先运行 `python3 scripts/upgrade_local_env.py`。升级脚本保留现有数据库所有者凭据，并添加独立的迁移与运行账号随机密码。
 
-本地 API 与数据库端口只绑定回环地址。`compose.override.yaml` 发布数据库端口供本地工具使用；生产运行只使用基础 `compose.yaml`，不发布数据库端口。API 镜像使用固定的非 root UID/GID，并在 Compose 中启用只读根文件系统、移除 Linux capabilities 和 `no-new-privileges`。
+本地 API 与数据库端口只绑定回环地址。`compose.override.yaml` 发布数据库端口供本地工具使用。单台云服务器生产运行使用独立的 `compose.production.yaml`，按 [上线与数据恢复手册](./production-operations.md) 通过 Caddy 发布 80/443，并在部署前检查秘密文件、异机备份、域名和端口暴露；不能叠加本地 `compose.override.yaml`。API 镜像使用固定的非 root UID/GID，并在 Compose 中启用只读根文件系统、移除 Linux capabilities 和 `no-new-privileges`。
 
 `database-init` 是可重复执行的一次性容器，先以管理员账号幂等配置角色与 schema，再以迁移账号运行 Alembic。API 只接收运行账号凭据。手动执行迁移使用 `docker compose run --rm database-init`，不要从 API 启动流程调用 `create_all()`。当前 `0001_database_baseline` 只建立 Alembic 版本基线，不创建尚未定稿的业务表。
 
 `0002_document_ingestion` 创建资料闭环所需的五张表。`0003`–`0007` 逐步增加游标索引、租户完整性、Worker 心跳与统一 citation locator；`0008_cited_rag` 增加索引、分块和独立问答任务；`0009_learning_core` 增加集合、连续对话、反馈、Quiz 与作答表；`0010_user_auth` 增加账号、成员、密码哈希、会话及登录限流；`0011_version_purge_trigger` 将学习记录清理限定于解析版本实际删除。每次改模型后运行 `docker compose run --rm database-init alembic check`，并从空库与上一 revision 验证升级。
 
-当前 Worker 直接领取 PostgreSQL 中的持久任务，使用短事务、租约、尝试上限和幂等键。PDF 与 OOXML 解析在禁止网络的子进程执行，API 只做流式上传与结构校验，不解析正文。引入 Redis/Celery 前先依据 [ADR-0001](./adr/0001-postgresql-document-jobs.md) 的迁移门槛评审，不能形成第二份任务状态。
+当前 Worker 直接领取 PostgreSQL 中的持久任务，使用短事务、租约、尝试上限和幂等键。PDF 与 OOXML 解析在禁止网络的子进程执行，API 只做流式上传与结构校验，不解析正文。将 Redis 用作任务队列或引入 Celery 前先依据 [ADR-0001](./adr/0001-postgresql-document-jobs.md) 的迁移门槛评审，不能形成第二份任务状态。
+
+Redis 当前只做 API 限流：登录按邮箱摘要，上传、索引、问答、Quiz 和反馈按工作区计数。限流脚本原子设置过期时间，并允许同一工作区和动作的幂等键重放。超额返回 `RATE_LIMITED`（429）；Redis 不可用返回 `RATE_LIMIT_UNAVAILABLE`（503），不继续执行高成本操作。开发模式直接运行 API 时默认关闭 Redis 限流；Compose 中开启。生产模式必须启用并配置 Redis 密码。
+
+当前固定窗口额度：登录每邮箱 15 分钟 20 次；上传和重新处理每工作区每小时 30 次；索引每小时 30 次；问答每小时 60 次；Quiz 创建及重评每小时 20 次；反馈每小时 120 次。幂等键重放不重复扣额。Redis 键使用带服务端秘密的 HMAC 摘要，不保存邮箱或资料内容；Redis 重启后额度重置。
 
 当前健康检查：`/health/live` 验证 API 进程存活，`/health/ready` 验证数据库和 pgvector 可用，`/health/worker` 验证文档 Worker 最近心跳。API 就绪与 Worker 就绪分开，避免后台处理故障把只读 API 误判为不可用；外部模型故障通过降级和指标展示，不应让整个 API 不健康。
 

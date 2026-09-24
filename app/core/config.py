@@ -1,4 +1,5 @@
 from functools import lru_cache
+from pathlib import Path
 from typing import Literal, Self
 from urllib.parse import urlsplit
 from uuid import UUID
@@ -30,6 +31,7 @@ class EnvironmentSettings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
+        secrets_dir="/run/secrets" if Path("/run/secrets").is_dir() else None,
         extra="ignore",
         hide_input_in_errors=True,
     )
@@ -116,6 +118,10 @@ class Settings(DatabaseSettings):
     storage_secret_key: SecretStr
     storage_bucket: str = "review-agent-documents"
     storage_secure: bool = False
+    redis_enabled: bool = False
+    redis_host: str = "localhost"
+    redis_port: int = Field(default=6379, ge=1, le=65535)
+    redis_password: SecretStr = SecretStr("")
     worker_health_stale_seconds: int = Field(default=30, gt=0)
 
     @model_validator(mode="after")
@@ -132,6 +138,10 @@ class Settings(DatabaseSettings):
             or (self.app_env == "production" and origin.scheme != "https")
         ):
             raise ValueError("AUTH_PUBLIC_ORIGIN must be a valid HTTPS origin in production")
+        if self.app_env == "production" and (
+            not self.redis_enabled or not self.redis_password.get_secret_value()
+        ):
+            raise ValueError("Production requires authenticated Redis rate limiting")
         return self
 
     @property

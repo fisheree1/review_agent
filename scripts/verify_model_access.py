@@ -1,7 +1,8 @@
-"""Make two bounded model calls using synthetic text; print no credentials or payloads."""
+"""Check configured model providers with synthetic text; print no private payloads."""
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 from uuid import uuid4
 
@@ -13,7 +14,7 @@ from app.rag.messages import FAILURES
 from app.rag.providers import CloudModels
 
 
-async def main() -> None:
+async def main(*, embedding_only: bool = False) -> None:
     settings = ModelSettings()
     async with httpx.AsyncClient(follow_redirects=False) as client:
         models = CloudModels(settings, client)
@@ -24,6 +25,10 @@ async def main() -> None:
         except RagFailure as exc:
             failed = True
             print(f"DashScope FAILED: {exc.code}: {FAILURES.get(exc.code, '模型检查失败')}")
+        if embedding_only:
+            if failed:
+                raise SystemExit(1) from None
+            return
         try:
             source = Evidence(uuid4(), "The median is robust against extreme outliers.", 1, {})
             answer, usage = await models.answer(
@@ -44,4 +49,7 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--embedding-only", action="store_true")
+    args = parser.parse_args()
+    asyncio.run(main(embedding_only=args.embedding_only))

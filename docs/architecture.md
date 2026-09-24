@@ -40,7 +40,7 @@ flowchart LR
     WORKER --> OBS
 ```
 
-当前本地环境用 Docker Compose 运行 React Web、API、Worker、PostgreSQL 和兼容 S3 的 MinIO。Web 通过同源代理调用 API；用户使用邮箱、密码和服务端会话登录。认证账号与工作区成员关系位于应用 schema，密码哈希与会话摘要位于独立认证 schema。生产环境使用 HTTPS、Secure/HttpOnly/SameSite Cookie 和 CSRF 校验；本地脚本令牌仅在开发模式有效。生产部署仍需配置备份、监控、外部服务预算及实际入口域名。
+当前本地环境用 Docker Compose 运行 React Web、API、Worker、PostgreSQL、Redis 和兼容 S3 的 MinIO。Web 通过同源代理调用 API；用户使用邮箱、密码和服务端会话登录。认证账号与工作区成员关系位于应用 schema，密码哈希与会话摘要位于独立认证 schema。单台云服务器生产配置见 [上线与数据恢复手册](./production-operations.md)：Caddy 提供 HTTPS 与静态页面，内部服务不发布端口，凭据按服务通过秘密文件挂载，异机备份成对保存数据库与原文件；实际域名、备份目的地和监控告警仍需部署者配置。生产 Cookie 使用 Secure/HttpOnly/SameSite 和 CSRF 校验；本地脚本令牌仅在开发模式有效。
 
 ### 2.1 技术选型基线
 
@@ -59,7 +59,7 @@ flowchart LR
 | 观测 | OpenTelemetry + 结构化日志 | 统一 API、Worker、数据库和模型调用的 trace |
 | 测试 | pytest；前端 Vitest/Testing Library/Playwright | 单元、集成、契约与关键旅程分层 |
 
-当前任务队列决策见 [ADR-0001](./adr/0001-postgresql-document-jobs.md)。当任务吞吐、隔离队列、调度或跨服务消费达到实测门槛时，可增加 Celery/Redis 或云队列；任务状态仍以 PostgreSQL 为事实源，不能把 broker/result backend 当作业务记录。MinIO 使用固定版本，本地 bucket 默认私有，应用凭据只允许访问文档 bucket。
+当前 Redis 只保存带 TTL 的 API 限流计数，不缓存文档正文、问答、会话或权限结果；Redis 故障时受限写操作返回稳定的 503，读取仍可用。当前任务队列决策见 [ADR-0001](./adr/0001-postgresql-document-jobs.md)。当任务吞吐、隔离队列、调度或跨服务消费达到实测门槛时，可增加 Celery/Redis 或云队列；任务状态仍以 PostgreSQL 为事实源，不能把 broker/result backend 当作业务记录。MinIO 使用固定版本，本地 bucket 默认私有，应用凭据只允许访问文档 bucket。
 
 ### 2.2 前端状态边界
 

@@ -73,5 +73,18 @@ def test_production_auth_uses_host_cookie() -> None:
         postgres_runtime_password=SecretStr("runtime-secret"),
         storage_access_key="storage-user",
         storage_secret_key=SecretStr("storage-secret"),
+        redis_enabled=True,
+        redis_password=SecretStr("redis-secret"),
     )
     assert settings.auth_cookie_name == "__Host-review_agent_session"
+
+
+def test_production_rejects_missing_redis_limit_store() -> None:
+    with pytest.raises(ValidationError, match="authenticated Redis rate limiting"):
+        Settings(
+            app_env="production",
+            auth_public_origin="https://study.example.com",
+            postgres_runtime_password=SecretStr("runtime-secret"),
+            storage_access_key="storage-user",
+            storage_secret_key=SecretStr("storage-secret"),
+        )

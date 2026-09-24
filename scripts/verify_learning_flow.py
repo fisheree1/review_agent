@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -37,6 +38,17 @@ CONTENT = (
     "The median resists extreme outliers in this example. "
     "A class initializes an object with __init__."
 )
+
+
+class UnusedStorage:
+    async def upload(self, *, object_key: str, source_path: Path, length: int) -> None:
+        raise AssertionError("Content reads must not upload objects")
+
+    async def download(self, *, object_key: str, destination_path: Path) -> None:
+        raise AssertionError("Content reads must not download objects")
+
+    async def delete(self, *, object_key: str) -> None:
+        raise AssertionError("Content reads must not delete objects")
 
 
 class FakeModels:
@@ -376,7 +388,7 @@ async def verify() -> None:
             app.dependency_overrides[get_learning_service] = lambda: service
             app.dependency_overrides[get_document_service] = lambda: DocumentService(
                 unit_of_work_factory=lambda: SqlAlchemyDocumentsUnitOfWork(sessions),
-                storage=None,  # Reading content never uses object storage.
+                storage=UnusedStorage(),
                 max_upload_bytes=100,
             )
             assert (await client.get(f"/api/v1/conversations/{conversation_id}")).status_code == 200

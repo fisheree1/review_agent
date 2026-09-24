@@ -18,6 +18,7 @@ RAG 的配置、使用、接口、限制与验证步骤见 [可引用 RAG 实现
 - [数据库设计](./docs/database-design.md)
 - [UI 与长时间阅读体验规范](./docs/ui-design-system.md)
 - [Git 与 GitHub 管理规范](./docs/git-github-workflow.md)
+- [单台云服务器上线与数据恢复](./docs/production-operations.md)
 
 ## 需求梳理
 
@@ -43,19 +44,19 @@ RAG 的配置、使用、接口、限制与验证步骤见 [可引用 RAG 实现
 
 ```text
 app/
-  api/           # HTTP 接口与请求/响应模型
+  auth/          # 账号、会话与工作区身份
   core/          # 配置、数据库、日志、安全
-  documents/     # 上传、解析、文档生命周期
+  documents/     # 上传、解析、文档生命周期与接口
   rag/           # 分块、Embedding、检索、引用
   learning/      # 集合、连续对话、反馈、Quiz 与作答
-  jobs/          # 异步索引任务
+  jobs/          # Worker 入口与心跳
 ```
 
-文档解析与模型调用建议放入异步任务队列，避免大文件处理占用 API 请求。模型提供商、Embedding 模型与文件存储应通过接口隔离，方便后续替换。
+文档解析与模型调用由独立 Worker 领取 PostgreSQL 中的持久任务；模型与文件存储通过应用接口隔离。
 
 ## 当前已完成的基础设施
 
-- FastAPI 服务及 Swagger 文档。
+- FastAPI 服务及开发环境 Swagger 文档。
 - PostgreSQL 17 + pgvector。
 - Alembic 迁移、数据库管理员/迁移/运行账号分离。
 - 私有 MinIO 原文件存储，管理凭据与应用 bucket 凭据分离。
@@ -66,6 +67,7 @@ app/
 - 资料集合、多资料问答、范围切换、回答反馈，以及有来源校验的 Quiz 生成、评分与复习。
 - API、数据库与文档 Worker 存活/就绪健康检查。
 - 后端、前端与容器闭环自动化测试。
+- Redis 短期限流及单台云服务器生产 Compose、加密异机备份和恢复手册；真实云服务器部署仍需单独验收。
 
 ## 启动
 
@@ -93,7 +95,11 @@ curl http://localhost:8000/health/worker
 
 阅读页面：<http://127.0.0.1:5173>
 
-接口文档：<http://localhost:8000/docs>
+云服务器上线使用独立的 [生产部署与备份手册](./docs/production-operations.md)。本地 `compose.yaml` 和 `.env` 不直接作为公网部署配置。
+
+Redis 在本地和生产 Compose 中只保存带过期时间的限流计数；登录、上传、索引、问答、Quiz 和反馈使用它限制突发请求。资料、会话、任务与可恢复状态仍以 PostgreSQL 为准。Redis 不发布主机端口，生产实例使用受限 ACL。
+
+开发环境接口文档：<http://localhost:8000/docs>。生产环境关闭此入口。
 
 Web 容器通过同源代理访问 API。浏览器使用账号密码登录和服务端会话；开发令牌仅供本地脚本兼容，生产环境不接受。首次部署默认关闭自行注册，先创建账号并接管已有本地空间：
 
@@ -149,7 +155,7 @@ docker compose down
 
 数据库和原文件分别保存在 Docker volumes 中；只有执行 `docker compose down -v` 才会删除这两类本地数据。
 
-默认本地配置只把 API、PostgreSQL 和 MinIO API 发布到 `127.0.0.1`。`compose.override.yaml` 仅供本地数据库/存储检查；生产或类生产环境应显式使用 `docker compose -f compose.yaml ...`，基础配置不发布数据库与对象存储端口。生产密钥应由秘密管理服务注入，而不是使用 `.env`。管理凭据只提供给基础设施和一次性初始化容器；API/Worker 只获得数据库 DML 权限和指定 bucket 的对象读写删除权限。
+默认本地 Compose 将 Web 和 API 发布到 `127.0.0.1`；`compose.override.yaml` 仅供本地数据库/存储检查，并将这两个端口也绑定到回环地址。Redis 只在 Compose 内部网络开放。生产环境使用独立的 `compose.production.yaml` 和服务器外置的秘密文件，公网只开放 HTTPS 入口；管理凭据仅提供给基础设施和一次性初始化容器。
 
 ## 本地开发与测试
 

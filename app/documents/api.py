@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, File, Header, Query, Response, UploadFil
 from app.core.auth import Principal, get_current_principal
 from app.core.config import Settings, get_settings
 from app.core.database import async_session_factory
+from app.core.rate_limit import RedisRateLimiter, enforce_rate_limit, get_rate_limiter
 from app.documents.application.ports import DocumentStorage
 from app.documents.application.service import DocumentService
 from app.documents.infrastructure.repository import SqlAlchemyDocumentsUnitOfWork
@@ -25,6 +26,7 @@ from app.documents.schemas import (
 )
 
 router = APIRouter(prefix="/api/v1/documents", tags=["documents"])
+Limiter = Annotated[RedisRateLimiter | None, Depends(get_rate_limiter)]
 
 
 @lru_cache
@@ -72,9 +74,16 @@ async def list_documents(
 async def upload_document(
     principal: Annotated[Principal, Depends(get_current_principal)],
     service: Annotated[DocumentService, Depends(get_document_service)],
+    limiter: Limiter,
     file: Annotated[UploadFile, File(description="PDF, DOCX, or PPTX learning material")],
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
 ) -> UploadResponse:
+    await enforce_rate_limit(
+        limiter,
+        action="upload",
+        subject=str(principal.workspace_public_id),
+        idempotency_key=idempotency_key,
+    )
     result = await service.upload(
         workspace_public_id=principal.workspace_public_id,
         source=file,
@@ -148,8 +157,15 @@ async def retry_document(
     document_id: UUID,
     principal: Annotated[Principal, Depends(get_current_principal)],
     service: Annotated[DocumentService, Depends(get_document_service)],
+    limiter: Limiter,
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
 ) -> DocumentResponse:
+    await enforce_rate_limit(
+        limiter,
+        action="upload",
+        subject=str(principal.workspace_public_id),
+        idempotency_key=idempotency_key,
+    )
     document = await service.retry(
         workspace_public_id=principal.workspace_public_id,
         document_public_id=document_id,

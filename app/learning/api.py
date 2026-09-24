@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 from app.core.auth import Principal, get_current_principal
 from app.core.config import RagSettings
 from app.core.database import async_session_factory
+from app.core.rate_limit import RedisRateLimiter, enforce_rate_limit, get_rate_limiter
 from app.learning.application import LearningService
 from app.learning.store import SqlLearningStore
 from app.rag.api import AnswerResponse
@@ -24,6 +25,7 @@ def get_learning_service() -> LearningService:
 Auth = Annotated[Principal, Depends(get_current_principal)]
 Service = Annotated[LearningService, Depends(get_learning_service)]
 RequestKey = Annotated[str, Header(alias="Idempotency-Key", min_length=1, max_length=200)]
+Limiter = Annotated[RedisRateLimiter | None, Depends(get_rate_limiter)]
 
 
 class ScopeRequest(BaseModel):
@@ -239,7 +241,14 @@ async def ask(
     principal: Auth,
     service: Service,
     idempotency_key: RequestKey,
+    limiter: Limiter,
 ) -> MessageResponse:
+    await enforce_rate_limit(
+        limiter,
+        action="ask",
+        subject=str(principal.workspace_public_id),
+        idempotency_key=idempotency_key,
+    )
     return MessageResponse.model_validate(
         await service.ask(
             principal.workspace_public_id, conversation_id, idempotency_key, body.question
@@ -271,7 +280,14 @@ async def feedback(
     principal: Auth,
     service: Service,
     idempotency_key: RequestKey,
+    limiter: Limiter,
 ) -> FeedbackResponse:
+    await enforce_rate_limit(
+        limiter,
+        action="feedback",
+        subject=str(principal.workspace_public_id),
+        idempotency_key=idempotency_key,
+    )
     return FeedbackResponse.model_validate(
         await service.store.feedback(
             principal.workspace_public_id, conversation_id, message_id, idempotency_key, body.rating
@@ -289,8 +305,18 @@ async def list_quizzes(principal: Auth, service: Service) -> list[QuizResponse]:
 
 @router.post("/quizzes", response_model=QuizResponse, status_code=202)
 async def create_quiz(
-    body: QuizRequest, principal: Auth, service: Service, idempotency_key: RequestKey
+    body: QuizRequest,
+    principal: Auth,
+    service: Service,
+    idempotency_key: RequestKey,
+    limiter: Limiter,
 ) -> QuizResponse:
+    await enforce_rate_limit(
+        limiter,
+        action="quiz",
+        subject=str(principal.workspace_public_id),
+        idempotency_key=idempotency_key,
+    )
     return QuizResponse.model_validate(
         await service.create_quiz(
             principal.workspace_public_id,
@@ -363,8 +389,9 @@ async def submit_attempt(
     "/quizzes/{quiz_id}/attempts/{attempt_id}:retry-grading", response_model=AttemptSummary
 )
 async def retry_grading(
-    quiz_id: UUID, attempt_id: UUID, principal: Auth, service: Service
+    quiz_id: UUID, attempt_id: UUID, principal: Auth, service: Service, limiter: Limiter
 ) -> AttemptSummary:
+    await enforce_rate_limit(limiter, action="quiz", subject=str(principal.workspace_public_id))
     return AttemptSummary.model_validate(
         await service.store.retry_grading(principal.workspace_public_id, quiz_id, attempt_id)
     )

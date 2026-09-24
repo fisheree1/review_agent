@@ -11,11 +11,13 @@ from app.auth.dependencies import get_auth_service
 from app.core.auth import Principal, get_current_principal
 from app.core.config import Settings, get_settings
 from app.core.errors import ApplicationError
+from app.core.rate_limit import RedisRateLimiter, enforce_rate_limit, get_rate_limiter
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 Service = Annotated[AuthService, Depends(get_auth_service)]
 Config = Annotated[Settings, Depends(get_settings)]
 Current = Annotated[Principal, Depends(get_current_principal)]
+Limiter = Annotated[RedisRateLimiter | None, Depends(get_rate_limiter)]
 
 
 class Credentials(BaseModel):
@@ -91,9 +93,15 @@ async def register(
 
 @router.post("/login", response_model=AuthView)
 async def login(
-    body: Credentials, request: Request, response: Response, settings: Config, service: Service
+    body: Credentials,
+    request: Request,
+    response: Response,
+    settings: Config,
+    service: Service,
+    limiter: Limiter,
 ) -> AuthView:
     _check_origin(request, settings)
+    await enforce_rate_limit(limiter, action="login", subject=body.email.strip().casefold())
     issued = await service.login(body.email, body.password)
     _set_cookie(response, issued.token, settings)
     identity = issued.identity

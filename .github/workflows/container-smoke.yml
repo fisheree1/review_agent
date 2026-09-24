@@ -8,9 +8,12 @@ on:
       - "migrations/**"
       - "Dockerfile"
       - "Dockerfile.web"
+      - "Dockerfile.edge"
       - "alembic.ini"
       - "compose.yaml"
+      - "compose.production.yaml"
       - "compose.override.yaml"
+      - "deploy/**"
       - "pyproject.toml"
       - "scripts/**"
       - "uv.lock"
@@ -24,9 +27,12 @@ on:
       - "migrations/**"
       - "Dockerfile"
       - "Dockerfile.web"
+      - "Dockerfile.edge"
       - "alembic.ini"
       - "compose.yaml"
+      - "compose.production.yaml"
       - "compose.override.yaml"
+      - "deploy/**"
       - "pyproject.toml"
       - "scripts/**"
       - "uv.lock"
@@ -55,6 +61,26 @@ jobs:
       - name: Validate Compose configuration
         run: docker compose config --quiet
 
+      - name: Validate isolated production configuration
+        run: |
+          mkdir -p "$RUNNER_TEMP/review-agent-prod-secrets"
+          for name in postgres_admin_password postgres_migrator_password postgres_runtime_password \
+            storage_admin_access_key storage_admin_secret_key storage_access_key storage_secret_key \
+            deepseek_api_key dashscope_api_key dashscope_embedding_url redis_password redis_acl; do
+            printf 'ci-placeholder' > "$RUNNER_TEMP/review-agent-prod-secrets/$name"
+          done
+          PUBLIC_DOMAIN=study.example.org PROD_SECRETS_DIR="$RUNNER_TEMP/review-agent-prod-secrets" \
+            docker compose -f compose.production.yaml config --quiet
+          PUBLIC_DOMAIN=study.example.org PROD_SECRETS_DIR="$RUNNER_TEMP/review-agent-prod-secrets" \
+            docker compose -f compose.production.yaml config --format json \
+              | jq -e '[.services | to_entries[] | select(.value.ports != null) | .key] == ["edge"]'
+
+      - name: Build production HTTPS and static frontend image
+        env:
+          PUBLIC_DOMAIN: study.example.org
+          PROD_SECRETS_DIR: ${{ runner.temp }}/review-agent-prod-secrets
+        run: docker compose -f compose.production.yaml build edge
+
       - name: Verify network exposure policy
         run: |
           docker compose config --format json \
@@ -76,6 +102,7 @@ jobs:
           docker compose run --rm database-init python -m scripts.verify_document_tenant_constraints
           docker compose exec -T api python -m scripts.verify_runtime_database_access
           docker compose exec -T api python -m scripts.verify_storage_access
+          docker compose exec -T api python -m scripts.verify_redis_rate_limit
 
       - name: Verify private PDF lifecycle
         run: docker compose exec -T api python -m scripts.verify_document_flow --base-url http://localhost:8000

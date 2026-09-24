@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 from app.core.auth import Principal, get_current_principal
 from app.core.config import RagSettings
 from app.core.database import async_session_factory
+from app.core.rate_limit import RedisRateLimiter, enforce_rate_limit, get_rate_limiter
 from app.documents.schemas import CitationLocatorResponse
 from app.rag.application import RagService
 from app.rag.domain import Scope
@@ -65,6 +66,7 @@ def get_rag_service() -> RagService:
 Auth = Annotated[Principal, Depends(get_current_principal)]
 Service = Annotated[RagService, Depends(get_rag_service)]
 RequestKey = Annotated[str, Header(alias="Idempotency-Key", min_length=1, max_length=200)]
+Limiter = Annotated[RedisRateLimiter | None, Depends(get_rate_limiter)]
 
 
 @router.get("/index", response_model=IndexResponse)
@@ -76,8 +78,18 @@ async def index_status(document_id: UUID, principal: Auth, service: Service) -> 
 
 @router.post("/index", response_model=IndexResponse, status_code=202)
 async def start_index(
-    document_id: UUID, principal: Auth, service: Service, idempotency_key: RequestKey
+    document_id: UUID,
+    principal: Auth,
+    service: Service,
+    idempotency_key: RequestKey,
+    limiter: Limiter,
 ) -> IndexResponse:
+    await enforce_rate_limit(
+        limiter,
+        action="index",
+        subject=str(principal.workspace_public_id),
+        idempotency_key=idempotency_key,
+    )
     return IndexResponse.model_validate(
         await service.index(Scope(principal.workspace_public_id, document_id), idempotency_key)
     )
@@ -90,7 +102,14 @@ async def ask(
     principal: Auth,
     service: Service,
     idempotency_key: RequestKey,
+    limiter: Limiter,
 ) -> QuestionResponse:
+    await enforce_rate_limit(
+        limiter,
+        action="ask",
+        subject=str(principal.workspace_public_id),
+        idempotency_key=idempotency_key,
+    )
     return QuestionResponse.model_validate(
         await service.ask(
             Scope(principal.workspace_public_id, document_id), idempotency_key, body.question

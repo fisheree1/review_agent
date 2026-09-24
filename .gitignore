@@ -1,4 +1,8 @@
 .env
+production.env
+backup.env
+deploy/secrets/
+*.dump
 .venv/
 __pycache__/
 .pytest_cache/

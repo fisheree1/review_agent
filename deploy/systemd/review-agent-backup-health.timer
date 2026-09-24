@@ -1,0 +1,10 @@
+[Unit]
+Description=Hourly Review Agent backup freshness check
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+Unit=review-agent-backup-health.service
+
+[Install]
+WantedBy=timers.target

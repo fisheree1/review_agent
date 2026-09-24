@@ -12,6 +12,9 @@ on:
       - "uv.lock"
       - "web/**"
       - "Dockerfile.web"
+      - "Dockerfile.edge"
+      - "compose.production.yaml"
+      - "deploy/**"
       - ".github/workflows/ci.yml"
   push:
     branches: [main]
@@ -25,6 +28,9 @@ on:
       - "uv.lock"
       - "web/**"
       - "Dockerfile.web"
+      - "Dockerfile.edge"
+      - "compose.production.yaml"
+      - "deploy/**"
       - ".github/workflows/ci.yml"
   workflow_dispatch:
 
@@ -55,6 +61,9 @@ jobs:
       - name: Install locked dependencies
         run: uv sync --frozen --group dev
 
+      - name: Audit locked Python dependencies
+        run: uv audit --locked
+
       - name: Lint
         run: uv run ruff check .
 
@@ -79,6 +88,9 @@ jobs:
 
       - name: Install locked web dependencies
         run: pnpm --dir web install --frozen-lockfile
+
+      - name: Audit production web dependencies
+        run: pnpm --dir web audit --prod --audit-level high
 
       - name: Type-check web application
         run: pnpm --dir web typecheck

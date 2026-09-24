@@ -1,0 +1,12 @@
+[Unit]
+Description=Review Agent encrypted production backup
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+User=root
+EnvironmentFile=/etc/review-agent/backup.env
+WorkingDirectory=/opt/review-agent
+ExecStart=/usr/bin/python3 /opt/review-agent/scripts/backup_production.py --env-file /etc/review-agent/production.env --staging-dir ${BACKUP_STAGING_DIR}
+TimeoutStartSec=6h
