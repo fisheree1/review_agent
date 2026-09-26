@@ -11,11 +11,18 @@ import {
 } from "../api/learning";
 import { citationLabel } from "../citations";
 import { AppHeader } from "../components/AppHeader";
+import { ConversationTaskResult } from "../components/ConversationTaskResult";
 import { ErrorState } from "../components/ErrorState";
 import { ScopePicker } from "../components/ScopePicker";
 import { useDocuments } from "../hooks/useDocuments";
 
 const emptyScope = (): ScopeChoice => ({ document_ids: [], collection_ids: [] });
+const taskExamples = [
+  ["比较资料", "比较所选资料的主要观点，并给出来源。"],
+  ["生成练习", "根据所选资料生成 5 道中等难度单选题。"],
+  ["讲解错题", "解释我最近一次练习的错题，并展示解析和来源。"],
+  ["薄弱点练习", "根据我最近练习的薄弱知识点，再生成 5 道中等难度单选题。"],
+] as const;
 
 function CollectionRow({ collection, documents, refresh }: {
   collection: Collection; documents: DocumentSummary[]; refresh: () => void;
@@ -71,7 +78,8 @@ export function StudyPage() {
   const [newScope, setNewScope] = useState<ScopeChoice>(emptyScope);
   const [activeScope, setActiveScope] = useState<ScopeChoice>(emptyScope);
   const [question, setQuestion] = useState("");
-  const askKey = useRef<string | null>(null);
+  const askKey = useRef<{ fingerprint: string; key: string } | null>(null);
+  const composer = useRef<HTMLTextAreaElement>(null);
   const feedbackKeys = useRef<Record<string, string>>({});
   const refreshCollections = () => { void cache.invalidateQueries({ queryKey: ["collections"] }); };
   const refreshConversations = () => {
@@ -96,11 +104,16 @@ export function StudyPage() {
     onSuccess: refreshConversations,
   });
   const ask = useMutation({
-    mutationFn: () => {
-      askKey.current ??= crypto.randomUUID();
-      return askConversation(conversationId!, question.trim(), askKey.current);
+    mutationFn: (request: string) => {
+      const fingerprint = JSON.stringify({ conversationId, request: request.trim(), scopeIdentity });
+      if (askKey.current?.fingerprint !== fingerprint) askKey.current = { fingerprint, key: crypto.randomUUID() };
+      return askConversation(conversationId!, request.trim(), askKey.current.key);
     },
-    onSuccess: () => { askKey.current = null; setQuestion(""); refreshConversations(); },
+    onSuccess: (_, request) => {
+      askKey.current = null;
+      setQuestion((current) => current.trim() === request.trim() ? "" : current);
+      refreshConversations();
+    },
   });
   const cancel = useMutation({
     mutationFn: (messageId: string) => cancelConversationMessage(conversationId!, messageId),
@@ -116,12 +129,15 @@ export function StudyPage() {
   const error = documentsError ?? collections.error ?? conversations.error ?? detail.error
     ?? createCollectionMutation.error ?? createConversationMutation.error ?? switchScope.error
     ?? ask.error ?? cancel.error ?? feedback.error;
+  const working = detail.data?.messages.some((message) => message.status === "queued" || message.status === "processing") ?? false;
+  const canSend = question.trim().length >= 2 && !ask.isPending && !working;
+  const draftTask = (request: string) => { setQuestion(request); composer.current?.focus(); };
 
   return <div className="app-page">
     <AppHeader />
     <main className="learning-page" id="main-content">
-      <header className="learning-heading"><span className="eyebrow">学习空间</span><h1>跨资料问答</h1>
-        <p>选择范围后提问。每条回答都会保留当时的资料范围和可核对的出处。</p></header>
+      <header className="learning-heading"><span className="eyebrow">学习空间</span><h1>学习助手</h1>
+        <p>在同一段对话里提问、比较资料、生成练习和复习错题。每次任务都保留所选资料范围。</p></header>
       {error ? <ErrorState message={error.message} onRetry={() => { refreshCollections(); refreshConversations(); }} /> : null}
       <div className="learning-grid">
         <aside className="learning-sidebar" aria-label="集合与对话">
@@ -143,7 +159,7 @@ export function StudyPage() {
           </section>
         </aside>
         <div className="learning-content">
-          <section className="learning-card"><h2>开始新对话</h2>
+          <details className="learning-card agent-new-conversation" open={!conversationId}><summary>开始新对话</summary>
             <form onSubmit={(event) => { event.preventDefault(); if (newTitle.trim()) createConversationMutation.mutate(); }}>
               <label htmlFor="conversation-title">对话标题</label>
               <input id="conversation-title" maxLength={160} onChange={(event) => setNewTitle(event.target.value)} value={newTitle} />
@@ -151,22 +167,30 @@ export function StudyPage() {
               {nextCursor ? <button className="button button--secondary" onClick={() => void loadMore()} type="button">加载更多资料</button> : null}
               <button className="button button--primary" disabled={!newTitle.trim() || createConversationMutation.isPending} type="submit">创建对话</button>
             </form>
-          </section>
-          {conversationId ? <section className="learning-card" aria-label="当前对话">
+          </details>
+          {conversationId ? <section className="learning-card agent-conversation" aria-label="当前对话">
             {detail.isPending ? <p role="status">正在打开对话…</p> : null}
             {detail.data ? <>
               <h2>{detail.data.title}</h2>
               <p className="learning-scope">当前范围：{detail.data.scope.map((item) => item.filename).join("、")}</p>
-              <ScopePicker collections={collections.data ?? []} documents={documents} label="切换后续提问范围" onChange={setActiveScope} value={activeScope} />
-              <button className="button button--secondary" disabled={switchScope.isPending} onClick={() => switchScope.mutate()} type="button">保存新范围</button>
-              <div className="learning-messages" aria-live="polite">{detail.data.messages.length === 0 ? <p>提出第一个问题。</p> : null}
+              <details className="agent-scope"><summary>调整资料范围</summary>
+                <p className="learning-scope">仅影响后续任务，已完成结果保留原来的范围。</p>
+                <ScopePicker collections={collections.data ?? []} documents={documents} label="切换后续提问范围" onChange={setActiveScope} value={activeScope} />
+                <button className="button button--secondary" disabled={switchScope.isPending} onClick={() => switchScope.mutate()} type="button">保存新范围</button>
+              </details>
+              <div className="agent-suggestions" aria-label="任务示例">{taskExamples.map(([label, request]) =>
+                <button className="button button--secondary" disabled={ask.isPending || working} key={label} onClick={() => draftTask(request)} type="button">{label}</button>)}</div>
+              <div className="learning-messages">{detail.data.messages.length === 0 ? <p className="agent-empty">直接描述你想完成的学习任务，例如“根据第三章生成 5 道题”。</p> : null}
                 {detail.data.messages.map((message) => <article className="learning-message" key={message.id}>
-                  <h3>{message.question}</h3>
+                  <div className="agent-request"><span className="eyebrow">你的请求</span><h3>{message.question}</h3></div>
                   <p className="learning-scope">本次范围：{message.scope.map((item) => item.filename).join("、")}</p>
-                  {message.status === "queued" || message.status === "processing" ? <p role="status">正在寻找依据… <button className="button button--secondary" onClick={() => cancel.mutate(message.id)} type="button">停止回答</button></p> : null}
-                  {message.status === "cancelled" ? <p>已停止回答。</p> : null}
-                  {message.status === "failed" ? <p role="alert">{message.failure_message ?? "回答失败，请重新提问。"}</p> : null}
+                  {message.status === "queued" || message.status === "processing" ? <div className="agent-progress"><p role="status">{message.task_result?.kind === "quiz" ? message.task_result.text : "正在规划任务并寻找依据…"}</p>
+                    <button className="button button--secondary" disabled={cancel.isPending} onClick={() => cancel.mutate(message.id)} type="button">停止任务</button></div> : null}
+                  {message.status === "cancelled" ? <p role="status">已停止任务。</p> : null}
+                  {message.status === "failed" ? <div role="alert"><p>{message.failure_message ?? "任务执行失败，请调整要求后重试。"}</p>
+                    <button className="button button--secondary" onClick={() => draftTask(message.question)} type="button">重新编辑任务</button></div> : null}
                   {message.status === "insufficient" ? <p>在所选资料中找不到足够依据。</p> : null}
+                  <ConversationTaskResult message={message} onRequest={draftTask} />
                   {message.answer?.claims.map((claim, index) => <div key={index}>
                     <p>{claim.text}</p>
                     {claim.citations.map((citation) => <p key={citation.source_id}>
@@ -174,7 +198,7 @@ export function StudyPage() {
                       <span className="learning-quote">{citation.quote}</span>
                     </p>)}
                   </div>)}
-                  {(message.status === "answered" || message.status === "insufficient") ?
+                  {message.answer && (message.status === "answered" || message.status === "insufficient") ?
                     <div className="learning-actions" aria-label="回答反馈">
                       {message.feedback ? <p>已反馈：{message.feedback === "helpful" ? "有帮助" : message.feedback === "unhelpful" ? "无帮助" : "引用不准确"}</p>
                         : <>{([ ["helpful", "有帮助"], ["unhelpful", "无帮助"], ["citation_inaccurate", "引用不准确"] ] as const).map(([rating, label]) =>
@@ -182,10 +206,12 @@ export function StudyPage() {
                     </div> : null}
                 </article>)}
               </div>
-              <form onSubmit={(event) => { event.preventDefault(); if (question.trim().length >= 2) ask.mutate(); }}>
-                <label htmlFor="conversation-question">继续提问</label>
-                <textarea id="conversation-question" maxLength={2000} onChange={(event) => setQuestion(event.target.value)} rows={3} value={question} />
-                <button className="button button--primary" disabled={question.trim().length < 2 || ask.isPending} type="submit">发送问题</button>
+              <form className="agent-composer" onSubmit={(event) => { event.preventDefault(); if (canSend) ask.mutate(question); }}>
+                <label htmlFor="conversation-question">发送任务或问题</label>
+                <textarea aria-describedby="agent-composer-help" ref={composer} id="conversation-question" maxLength={2000} onChange={(event) => setQuestion(event.target.value)} rows={3} value={question}
+                  onKeyDown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key === "Enter" && !event.nativeEvent.isComposing) { event.preventDefault(); if (canSend) ask.mutate(question); } }} />
+                <div className="agent-composer-footer"><p id="agent-composer-help">Ctrl / ⌘ + Enter 发送。{working ? "当前任务完成或停止后可继续。" : "回答与练习只使用当前资料范围。"}</p>
+                  <button className="button button--primary" disabled={!canSend} type="submit">{ask.isPending ? "正在发送…" : "发送"}</button></div>
               </form>
             </> : null}
           </section> : null}

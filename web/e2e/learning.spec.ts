@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-test("switch document scope, rate a cited answer, and complete a sourced Quiz", async ({ page }) => {
+test("switch document scope, rate a cited answer, and complete an Agent Quiz", async ({ page }) => {
   const first = "11111111-1111-4111-8111-111111111111";
   const second = "22222222-2222-4222-8222-222222222222";
   const conversationId = "33333333-3333-4333-8333-333333333333";
@@ -62,6 +62,7 @@ test("switch document scope, rate a cited answer, and complete a sourced Quiz", 
     if (url.pathname.endsWith("/quizzes")) {
       if (route.request().method() === "POST") {
         const body = route.request().postDataJSON() as { title: string; config: unknown };
+        expect((body.config as { generation_mode: string }).generation_mode).toBe("agent");
         quiz = { id: quizId, title: body.title, config: body.config, status: "ready", question_count: 1,
           scope: [{ document_id: first, version_id: 1, filename: "stats.pdf" }], failure_message: null };
         data = quiz;
@@ -95,11 +96,12 @@ test("switch document scope, rate a cited answer, and complete a sourced Quiz", 
   await page.getByRole("group", { name: "选择资料范围" }).getByLabel("classes.pdf").check();
   await page.getByRole("button", { name: "创建对话" }).click();
   await expect(page.getByText("当前范围：stats.pdf、classes.pdf")).toBeVisible();
+  await page.getByText("调整资料范围", { exact: true }).click();
   await page.getByRole("group", { name: "切换后续提问范围" }).getByLabel("stats.pdf").uncheck();
   await page.getByRole("button", { name: "保存新范围" }).click();
   await expect(page.getByText("当前范围：classes.pdf")).toBeVisible();
-  await page.getByLabel("继续提问").fill("Why use the median?");
-  await page.getByRole("button", { name: "发送问题" }).click();
+  await page.getByLabel("发送任务或问题").fill("Why use the median?");
+  await page.getByRole("button", { name: "发送", exact: true }).click();
   await expect(page.getByText("A class initializes an object.")).toBeVisible();
   await page.getByRole("button", { name: "有帮助" }).click();
   await expect(page.getByText("已反馈：有帮助")).toBeVisible();
@@ -107,8 +109,14 @@ test("switch document scope, rate a cited answer, and complete a sourced Quiz", 
   await page.goto("/quizzes");
   await page.getByLabel("标题", { exact: true }).fill("Statistics check");
   await page.getByRole("group", { name: "出题资料范围" }).getByLabel("stats.pdf").check();
-  await page.getByRole("button", { name: /生成 5 题/ }).click();
+  await expect(page.getByLabel("出题方式")).toHaveValue("standard");
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByLabel("出题方式").selectOption("agent");
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.getByRole("button", { name: /生成 5 题/ }).focus();
+  await page.keyboard.press("Enter");
   await expect(page.getByText("已生成 1 题")).toBeVisible();
+  await expect(page.getByText("出题方式：自主规划出题（实验）")).toBeVisible();
   await page.getByRole("button", { name: "开始作答" }).click();
   await expect(page.getByText("参考答案：Median")).not.toBeVisible();
   await page.getByRole("radio", { name: "Median" }).check();

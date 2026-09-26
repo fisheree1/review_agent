@@ -22,17 +22,24 @@ def validate_blueprint(config: dict[str, Any]) -> dict[str, Any]:
     difficulty = config.get("difficulty")
     language = config.get("language")
     topic = config.get("topic", "")
+    generation_mode = config.get("generation_mode", "standard")
+    if generation_mode not in ("standard", "agent"):
+        raise ValueError("Invalid generation mode")
     if difficulty not in DIFFICULTIES or language not in ("zh", "en"):
         raise ValueError("Invalid difficulty or language")
     if not isinstance(topic, str) or len(topic.strip()) > 120:
         raise ValueError("Invalid topic")
-    return {
+    blueprint = {
         "type_counts": counts,
         "difficulty": difficulty,
         "language": language,
         "topic": topic.strip(),
         "schema_version": QUIZ_SCHEMA_VERSION,
     }
+    # Preserve old standard-mode configs for idempotent retries across the rollout.
+    if generation_mode == "agent":
+        blueprint["generation_mode"] = generation_mode
+    return blueprint
 
 
 def validate_candidates(

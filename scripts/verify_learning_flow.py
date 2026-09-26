@@ -10,6 +10,7 @@ from uuid import UUID, uuid4
 
 import httpx
 from sqlalchemy import delete, func, select, update
+from sqlalchemy.exc import IntegrityError
 
 from app.core.auth import Principal, get_current_principal
 from app.core.database import async_session_factory as sessions
@@ -26,10 +27,10 @@ from app.documents.infrastructure.models import (
 from app.documents.infrastructure.repository import SqlAlchemyDocumentsUnitOfWork
 from app.learning.api import get_learning_service
 from app.learning.application import LearningProcessor, LearningService
-from app.learning.models import Conversation, Quiz, QuizAnswer, QuizAttempt
+from app.learning.models import Conversation, ConversationMessage, Quiz, QuizAnswer, QuizAttempt
 from app.learning.store import SqlLearningStore
 from app.main import app
-from app.rag.domain import Evidence
+from app.rag.domain import Evidence, RagFailure
 from app.rag.models import DocumentChunk, DocumentIndex
 
 PROFILE = "learning-integration:1024:source-window-1500-180-v1"
@@ -55,9 +56,81 @@ class FakeModels:
     def __init__(self) -> None:
         self.answer_document_ids: set[UUID] = set()
 
+    async def plan_task(
+        self, request: str, *, history: list[dict[str, str]], review_available: bool
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        config = {
+            "type_counts": {"single": 1, "multiple": 0, "true_false": 0, "short": 1},
+            "difficulty": "medium",
+            "language": "en",
+            "topic": "",
+        }
+        actions: dict[str, dict[str, Any]] = {
+            "Create a two-question quiz.": {
+                "action": "create_quiz",
+                "title": "Chat Quiz",
+                "config": config,
+            },
+            "Explain my mistakes.": {"action": "review_mistakes"},
+            "Practice my weak topics.": {
+                "action": "practice_weak_topics",
+                "title": "Weak Topic Quiz",
+                "config": config,
+            },
+            "Delete the source document.": {
+                "action": "clarify",
+                "message": "这里只支持问答、出题与复习，请使用资料库管理资料。",
+            },
+        }
+        return actions.get(request, {"action": "answer"}), {
+            "model": "fake",
+            "prompt_version": "task-fixture-v1",
+            "prompt_tokens": 20,
+            "completion_tokens": 5,
+        }
+
     async def embed(self, texts: list[str], *, query: bool = False) -> list[list[float]]:
         unrelated = [0.0] * 1023 + [1.0]
         return [unrelated if text == "What is the exam date?" else VECTOR for text in texts]
+
+    async def plan_step(
+        self,
+        question: str,
+        *,
+        history: list[dict[str, str]],
+        observations: list[dict[str, Any]],
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        usage = {"model": "fake", "prompt_tokens": 20, "completion_tokens": 5}
+        if not observations:
+            return {"tool": "search", "query": question}, usage
+        discovered = next(item["sources"] for item in observations if item["tool"] == "search")
+        read_ids = {item["source_id"] for item in observations if item["tool"] == "read_source"}
+        read_documents = {
+            item["document_id"] for item in discovered if item["source_id"] in read_ids
+        }
+        for item in discovered:
+            if item["document_id"] not in read_documents:
+                return {"tool": "read_source", "source_id": item["source_id"]}, usage
+        return {"tool": "answer"}, usage
+
+    async def plan_quiz_step(
+        self, config: dict[str, Any], *, observations: list[dict[str, Any]]
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        decision, usage = await self.plan_step(
+            config.get("topic") or "core concepts", history=[], observations=observations
+        )
+        if decision["tool"] == "answer":
+            decision = {"tool": "generate_quiz"}
+        return decision, usage
+
+    async def generate_quiz_with_usage(
+        self, config: dict[str, Any], sources: list[Evidence]
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        return await self.generate_quiz(config, sources), {
+            "model": "fake",
+            "prompt_tokens": 30,
+            "completion_tokens": 10,
+        }
 
     async def answer(
         self, question: str, sources: list[Evidence], *, history: list[dict[str, str]] | None = None
@@ -74,7 +147,12 @@ class FakeModels:
                     "citations": [{"source_id": str(source.id), "quote": source.content[:46]}],
                 }
             ],
-        }, {"model": "fake", "history_count": len(history or [])}
+        }, {
+            "model": "fake",
+            "history_count": len(history or []),
+            "prompt_tokens": 30,
+            "completion_tokens": 10,
+        }
 
     async def generate_quiz(
         self, config: dict[str, Any], sources: list[Evidence]
@@ -275,6 +353,11 @@ async def verify() -> None:
         sources = await store.message_sources(task[0], task[1], VECTOR, task[3])
         assert sources and {source.document_id for source in sources} == {second}
         await store.cancel_message(workspace_id_1, conversation_id, UUID(second_message["id"]))
+        try:
+            await store.ensure_message_active(task[0], task[1])
+            raise AssertionError("Cancelled message must stop the Agent")
+        except RagFailure as exc:
+            assert exc.code == "AGENT_RUN_INACTIVE"
         await store.finish_message(
             task[0], task[1], {"insufficient_evidence": True, "claims": []}, {}
         )
@@ -347,6 +430,223 @@ async def verify() -> None:
             assert await session.scalar(select(func.count()).select_from(QuizAnswer)) == 2
         print("PASS: quiz validation, answer privacy, grading, weak topics, idempotency")
 
+        guidance = await service.ask(
+            workspace_id_1, conversation_id, "review-no-context", "Explain my mistakes."
+        )
+        await processor.process_message()
+        messages = (await store.get_conversation(workspace_id_1, conversation_id))["messages"]
+        assert (
+            next(item for item in messages if item["id"] == guidance["id"])["task_result"]["kind"]
+            == "clarification"
+        )
+        await store.set_conversation_scope(workspace_id_1, conversation_id, [first], [])
+        chat = await service.ask(
+            workspace_id_1, conversation_id, "chat-quiz", "Create a two-question quiz."
+        )
+        await processor.process_message()
+        chat_result = next(
+            item
+            for item in (await store.get_conversation(workspace_id_1, conversation_id))["messages"]
+            if item["id"] == chat["id"]
+        )
+        assert chat_result["answer"] is None and chat_result["task_result"]["kind"] == "quiz"
+        chat_quiz_id = UUID(chat_result["task_result"]["quiz_id"])
+        assert (
+            await service.ask(
+                workspace_id_1, conversation_id, "chat-quiz", "Create a two-question quiz."
+            )
+        )["task_result"]["quiz_id"] == str(chat_quiz_id)
+        assert not await processor.process_message()
+        chat_quiz = await store.get_quiz(workspace_id_1, chat_quiz_id)
+        assert chat_quiz["question_count"] == 2 and all(
+            question["answer"] is None for question in chat_quiz["questions"]
+        )
+        chat_attempt = await store.start_attempt(workspace_id_1, chat_quiz_id, "chat-attempt")
+        chat_attempt_id = UUID(chat_attempt["id"])
+        await store.save_answer(
+            workspace_id_1,
+            chat_quiz_id,
+            chat_attempt_id,
+            UUID(chat_quiz["questions"][0]["id"]),
+            "Mean",
+        )
+        await store.submit_attempt(workspace_id_1, chat_quiz_id, chat_attempt_id)
+        assert (await store.get_attempt(workspace_id_1, chat_quiz_id, chat_attempt_id))[
+            "weak_topics"
+        ] == ["robust statistics"]
+        for key, request, kind in [
+            ("chat-review", "Explain my mistakes.", "review"),
+            ("chat-weak", "Practice my weak topics.", "quiz"),
+            ("chat-unsupported", "Delete the source document.", "clarification"),
+        ]:
+            created_task = await service.ask(workspace_id_1, conversation_id, key, request)
+            await processor.process_message()
+            task_result = next(
+                item
+                for item in (await store.get_conversation(workspace_id_1, conversation_id))[
+                    "messages"
+                ]
+                if item["id"] == created_task["id"]
+            )["task_result"]
+            assert task_result["kind"] == kind
+            if kind == "review":
+                assert task_result["attempt_id"] == str(chat_attempt_id)
+            if key == "chat-weak":
+                assert (await store.get_quiz(workspace_id_1, UUID(task_result["quiz_id"])))[
+                    "config"
+                ]["topic"] == "robust statistics"
+        await expect_error(
+            store.feedback(
+                workspace_id_1, conversation_id, UUID(chat["id"]), "task-feedback", "helpful"
+            ),
+            "ANSWER_NOT_READY",
+        )
+        cancelled_task = await service.ask(
+            workspace_id_1, conversation_id, "chat-cancel-quiz", "Create a two-question quiz."
+        )
+        claimed_message = await store.claim_message()
+        assert claimed_message is not None
+        await store.prepare_message_quiz(claimed_message[0], claimed_message[1], "Cancelled Quiz")
+        await store.cancel_message(workspace_id_1, conversation_id, UUID(cancelled_task["id"]))
+        await store.finish_message_quiz(
+            claimed_message[0], claimed_message[1], "Cancelled Quiz", config, [], {}
+        )
+        async with sessions() as session:
+            assert (
+                await session.scalar(
+                    select(func.count()).select_from(Quiz).where(Quiz.title == "Cancelled Quiz")
+                )
+                == 0
+            )
+        async with sessions.begin() as session:
+            foreign_quiz = Quiz(
+                workspace_id=foreign_internal,
+                idempotency_key="foreign-quiz",
+                title="Foreign Quiz",
+                config=config,
+                requested_scope={},
+                scope=[],
+                profile=PROFILE,
+                status="ready",
+            )
+            session.add(foreign_quiz)
+            await session.flush()
+            try:
+                async with session.begin_nested():
+                    await session.execute(
+                        update(ConversationMessage)
+                        .where(
+                            ConversationMessage.workspace_id == owner_internal,
+                            ConversationMessage.public_id == UUID(chat["id"]),
+                        )
+                        .values(quiz_id=foreign_quiz.id)
+                    )
+                raise AssertionError(
+                    "Cross-workspace Quiz links must fail at the database boundary"
+                )
+            except IntegrityError:
+                pass
+        print(
+            "PASS: unified chat Quiz, review, weak practice, cancellation "
+            "and cross-workspace references"
+        )
+
+        agent_config = {**config, "generation_mode": "agent", "topic": "outliers"}
+        agent_quiz = await service.create_quiz(
+            workspace_id_1, "quiz-agent", "Planned Quiz", agent_config, [first], []
+        )
+        agent_quiz_id = UUID(agent_quiz["id"])
+        await expect_error(
+            service.create_quiz(workspace_id_1, "quiz-agent", "Planned Quiz", config, [first], []),
+            "IDEMPOTENCY_CONFLICT",
+        )
+        await processor.process_quiz()
+        assert (await store.get_quiz(workspace_id_1, agent_quiz_id))["status"] == "ready"
+        await expect_error(store.get_quiz(workspace_id_2, agent_quiz_id), "RESOURCE_NOT_FOUND")
+        async with sessions() as session:
+            generated = await session.scalar(select(Quiz).where(Quiz.public_id == agent_quiz_id))
+            assert generated is not None and generated.generation_usage is not None
+            assert generated.generation_usage["agent_version"] == "scoped-quiz-tools-v1"
+            assert generated.generation_usage["model_calls"] == 4
+            assert "outliers" not in str(generated.generation_usage)
+        assert "generation_usage" not in await store.get_quiz(workspace_id_1, agent_quiz_id)
+        print("PASS: opt-in Quiz planning, private audit, scope isolation and mode idempotency")
+
+        concurrent = await asyncio.gather(
+            *(
+                service.create_quiz(
+                    workspace_id_1, "quiz-concurrent", "Concurrent Quiz", config, [first], []
+                )
+                for _ in range(2)
+            )
+        )
+        assert concurrent[0]["id"] == concurrent[1]["id"]
+        async with sessions() as session:
+            assert (
+                await session.scalar(
+                    select(func.count())
+                    .select_from(Quiz)
+                    .where(
+                        Quiz.workspace_id == owner_internal,
+                        Quiz.idempotency_key == "quiz-concurrent",
+                    )
+                )
+                == 1
+            )
+        # Finish this fixture so it cannot occupy a later worker claim.
+        await processor.process_quiz()
+        print("PASS: concurrent identical Quiz requests return the same resource")
+
+        # Chat reservations and standalone creation share the database quota.
+        async with sessions.begin() as session:
+            existing_count = await session.scalar(
+                select(func.count()).select_from(Quiz).where(Quiz.workspace_id == owner_internal)
+            )
+            fillers = [
+                Quiz(
+                    workspace_id=owner_internal,
+                    idempotency_key=f"quota-fixture-{index}",
+                    title="Quota fixture",
+                    config=config,
+                    requested_scope={},
+                    scope=[],
+                    profile=PROFILE,
+                    status="failed",
+                )
+                for index in range(19 - (existing_count or 0))
+            ]
+            session.add_all(fillers)
+        reserved_task = await service.ask(
+            workspace_id_1, conversation_id, "quota-reservation", "Create a two-question quiz."
+        )
+        reserved_message = await store.claim_message()
+        assert reserved_message is not None and str(reserved_message[0]) == reserved_task["id"]
+        await store.prepare_message_quiz(*reserved_message[:2], "Reserved Quiz")
+        await expect_error(
+            service.create_quiz(
+                workspace_id_1, "quota-blocked", "Blocked Quiz", config, [first], []
+            ),
+            "QUIZ_LIMIT",
+        )
+        blocked_task = await service.ask(
+            workspace_id_1, conversation_id, "quota-chat-blocked", "Create a two-question quiz."
+        )
+        await processor.process_message()
+        blocked = next(
+            item
+            for item in (await store.get_conversation(workspace_id_1, conversation_id))["messages"]
+            if item["id"] == blocked_task["id"]
+        )
+        assert blocked["status"] == "failed" and blocked["failure_code"] == "QUIZ_LIMIT"
+        await store.cancel_message(workspace_id_1, conversation_id, UUID(reserved_task["id"]))
+        async with sessions.begin() as session:
+            await session.execute(
+                delete(Quiz).where(
+                    Quiz.workspace_id == owner_internal, Quiz.title == "Quota fixture"
+                )
+            )
+        print("PASS: conversation reservations and standalone Quiz share the workspace quota")
+
         interrupted = await store.start_attempt(workspace_id_1, quiz_id, "attempt-interrupted")
         interrupted_id = UUID(interrupted["id"])
         await store.save_answer(
@@ -400,6 +700,33 @@ async def verify() -> None:
                 )
             ).status_code == 422
             assert (await client.get(f"/api/v1/quizzes/{quiz_id}")).status_code == 200
+            agent_body = {
+                "title": "API planned quiz",
+                "config": agent_config,
+                "document_ids": [str(second)],
+                "collection_ids": [],
+            }
+            created = await client.post(
+                "/api/v1/quizzes", headers={"Idempotency-Key": "api-agent"}, json=agent_body
+            )
+            assert (
+                created.status_code == 202
+                and created.json()["config"]["generation_mode"] == "agent"
+            )
+            assert (
+                await client.post(
+                    "/api/v1/quizzes",
+                    headers={"Idempotency-Key": "api-invalid-mode"},
+                    json={**agent_body, "config": {**agent_config, "generation_mode": "unsafe"}},
+                )
+            ).status_code == 422
+            assert (
+                await client.post(
+                    "/api/v1/quizzes",
+                    headers={"Idempotency-Key": "api-foreign-agent"},
+                    json={**agent_body, "document_ids": [str(foreign)]},
+                )
+            ).status_code == 404
             assert (
                 await client.get(f"/api/v1/quizzes/{quiz_id}/attempts/{attempt_id}")
             ).status_code == 200

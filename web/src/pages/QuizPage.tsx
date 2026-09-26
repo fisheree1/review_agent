@@ -88,6 +88,11 @@ export function QuizPage() {
               </select>
               <label htmlFor="quiz-topic">重点知识点（可选）</label>
               <input id="quiz-topic" maxLength={120} value={config.topic} onChange={(event) => setConfig({ ...config, topic: event.target.value })} />
+              <label htmlFor="quiz-generation-mode">出题方式</label>
+              <select id="quiz-generation-mode" aria-describedby="quiz-generation-help" value={config.generation_mode ?? "standard"} onChange={(event) => setConfig({ ...config, generation_mode: event.target.value as QuizConfig["generation_mode"] })}>
+                <option value="standard">标准出题</option><option value="agent">自主规划出题（实验）</option>
+              </select>
+              <p id="quiz-generation-help">自主规划会按知识点选择检索与阅读步骤，可能耗时更长；题目仍须通过答案与来源校验。</p>
               <button className="button button--primary" disabled={!title.trim() || requested < 1 || requested > 10 || create.isPending} type="submit">生成 {requested} 题</button>
             </form>
           </section>
@@ -95,6 +100,7 @@ export function QuizPage() {
             {quiz.isPending ? <p role="status">正在打开 Quiz…</p> : null}
             {quiz.data ? <><h2>{quiz.data.title}</h2>
               <p className="learning-scope">资料范围：{quiz.data.scope.map((item) => item.filename).join("、")}</p>
+              <p>出题方式：{quiz.data.config.generation_mode === "agent" ? "自主规划出题（实验）" : "标准出题"}</p>
               {quiz.data.status === "queued" || quiz.data.status === "processing" ? <p role="status">正在检索依据并校验题目…</p> : null}
               {quiz.data.status === "failed" ? <p role="alert">{quiz.data.failure_message ?? "题目生成失败，请重新创建。"}</p> : null}
               {quiz.data.status === "ready" ? <><p>已生成 {quiz.data.question_count} 题；若少于请求数量，表示其余候选题没有通过校验。</p>

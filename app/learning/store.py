@@ -8,7 +8,7 @@ from sqlalchemy import and_, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.errors import ApplicationError
-from app.documents.infrastructure.models import DocumentModel
+from app.documents.infrastructure.models import DocumentModel, WorkspaceModel
 from app.learning.models import (
     AnswerFeedback,
     Collection,
@@ -31,7 +31,7 @@ from app.learning.scope import (
     snapshot_ready,
     workspace_id,
 )
-from app.rag.domain import Evidence
+from app.rag.domain import Evidence, RagFailure
 from app.rag.messages import FAILURES
 
 LEASE_SECONDS = 180
@@ -53,6 +53,7 @@ def message_view(message: ConversationMessage, rating: str | None = None) -> dic
         "status": message.status,
         "scope": message.scope,
         "answer": message.answer,
+        "task_result": message.task_result,
         "failure_code": message.failure_code,
         "failure_message": FAILURES.get(message.failure_code or ""),
         "feedback": rating,
@@ -430,7 +431,7 @@ class SqlLearningStore:
             )
             if message is None:
                 raise missing()
-            if message.status not in ("answered", "insufficient"):
+            if message.status not in ("answered", "insufficient") or message.answer is None:
                 raise ApplicationError(
                     code="ANSWER_NOT_READY", message="回答尚未完成", status_code=409
                 )
@@ -515,12 +516,14 @@ class SqlLearningStore:
             history = [
                 {
                     "question": item.question,
-                    "answer": " ".join(claim["text"] for claim in item.answer.get("claims", []))[
-                        :600
-                    ],
+                    "answer": (
+                        " ".join(claim["text"] for claim in item.answer.get("claims", []))
+                        if item.answer
+                        else (item.task_result or {}).get("text", "")
+                    )[:600],
                 }
                 for item in reversed(previous)
-                if item.scope == message.scope and item.answer
+                if item.scope == message.scope and (item.answer or item.task_result)
             ]
             return (
                 message.public_id,
@@ -560,6 +563,197 @@ class SqlLearningStore:
             return await retrieve_sources(
                 session, message.workspace_id, message.scope, message.profile, vector, query_text
             )
+
+    async def ensure_message_active(self, public_id: UUID, fence: UUID) -> None:
+        async with self.sessions.begin() as session:
+            if await self._active_message(session, public_id, fence) is None:
+                raise RagFailure("AGENT_RUN_INACTIVE", "消息已停止或资料范围不可用")
+
+    async def _check_quiz_capacity(self, session: AsyncSession, workspace: int) -> None:
+        await session.scalar(
+            select(WorkspaceModel.id).where(WorkspaceModel.id == workspace).with_for_update()
+        )
+        since = datetime.now(UTC) - timedelta(hours=1)
+        quizzes = await session.scalar(
+            select(func.count())
+            .select_from(Quiz)
+            .where(
+                Quiz.workspace_id == workspace,
+                Quiz.created_at > since,
+            )
+        )
+        reserved = await session.scalar(
+            select(func.count())
+            .select_from(ConversationMessage)
+            .where(
+                ConversationMessage.workspace_id == workspace,
+                ConversationMessage.status.in_(["queued", "processing"]),
+                ConversationMessage.task_result["kind"].astext == "quiz",
+            )
+        )
+        if (quizzes or 0) + (reserved or 0) >= 20:
+            raise ApplicationError(
+                code="QUIZ_LIMIT", message="出题过于频繁，请稍后重试", status_code=429
+            )
+
+    async def prepare_message_quiz(self, public_id: UUID, fence: UUID, title: str) -> None:
+        async with self.sessions.begin() as session:
+            message = await self._active_message(session, public_id, fence)
+            if message is None:
+                raise RagFailure("AGENT_RUN_INACTIVE", "任务已停止")
+            if message.task_result is None:
+                try:
+                    await self._check_quiz_capacity(session, message.workspace_id)
+                except ApplicationError as exc:
+                    raise RagFailure(exc.code, exc.message) from exc
+                message.task_result = {
+                    "kind": "quiz",
+                    "title": title,
+                    "text": "正在检索依据并生成练习。",
+                }
+
+    async def finish_message_task(
+        self, public_id: UUID, fence: UUID, result: dict[str, Any], usage: dict[str, Any]
+    ) -> None:
+        async with self.sessions.begin() as session:
+            message = await self._active_message(session, public_id, fence)
+            if message is not None:
+                if result.get("quiz_id"):
+                    quiz = await session.scalar(
+                        select(Quiz).where(
+                            Quiz.workspace_id == message.workspace_id,
+                            Quiz.public_id == UUID(result["quiz_id"]),
+                            Quiz.scope == message.scope,
+                        )
+                    )
+                    if quiz is None:
+                        raise RagFailure("AGENT_RUN_INACTIVE", "复习来源不可用")
+                    message.quiz_id = quiz.id
+                message.task_result = result
+                message.usage = usage
+                message.status = "answered"
+                message.fence = None
+                message.lease_until = None
+
+    async def finish_message_quiz(
+        self,
+        public_id: UUID,
+        fence: UUID,
+        title: str,
+        config: dict[str, Any],
+        questions: list[dict[str, Any]],
+        usage: dict[str, Any],
+    ) -> None:
+        async with self.sessions.begin() as session:
+            message = await self._active_message(session, public_id, fence)
+            if message is None:
+                return
+            quiz = Quiz(
+                workspace_id=message.workspace_id,
+                idempotency_key=f"agent-message:{public_id}",
+                title=title,
+                config=config,
+                requested_scope={
+                    "document_ids": sorted(item["document_id"] for item in message.scope),
+                    "collection_ids": [],
+                },
+                scope=message.scope,
+                profile=message.profile,
+                status="ready",
+                generation_usage=usage,
+            )
+            session.add(quiz)
+            await session.flush()
+            session.add_all(
+                QuizDocument(
+                    workspace_id=message.workspace_id,
+                    quiz_id=quiz.id,
+                    document_version_id=item["version_id"],
+                )
+                for item in message.scope
+            )
+            session.add_all(
+                QuizQuestion(
+                    workspace_id=message.workspace_id,
+                    quiz_id=quiz.id,
+                    ordinal=ordinal,
+                    **question,
+                )
+                for ordinal, question in enumerate(questions, start=1)
+            )
+            message.quiz_id = quiz.id
+            message.task_result = {
+                "kind": "quiz",
+                "quiz_id": str(quiz.public_id),
+                "title": title,
+                "text": f"已生成 {len(questions)} 题，可在这里作答；未通过校验的题目不会发布。",
+            }
+            message.usage = usage
+            message.status = "answered"
+            message.fence = None
+            message.lease_until = None
+
+    async def message_review_context(self, public_id: UUID, fence: UUID) -> dict[str, Any] | None:
+        async with self.sessions.begin() as session:
+            message = await self._active_message(session, public_id, fence)
+            if message is None:
+                raise RagFailure("AGENT_RUN_INACTIVE", "任务已停止")
+            row = (
+                await session.execute(
+                    select(Quiz, QuizAttempt)
+                    .join(
+                        QuizAttempt,
+                        and_(
+                            QuizAttempt.quiz_id == Quiz.id,
+                            QuizAttempt.workspace_id == Quiz.workspace_id,
+                        ),
+                    )
+                    .where(
+                        Quiz.workspace_id == message.workspace_id,
+                        Quiz.scope == message.scope,
+                        QuizAttempt.workspace_id == message.workspace_id,
+                        QuizAttempt.status == "submitted",
+                    )
+                    .order_by(QuizAttempt.submitted_at.desc(), QuizAttempt.id.desc())
+                    .limit(1)
+                )
+            ).first()
+            if row is None:
+                return None
+            quiz, attempt = row
+            wrong = (
+                await session.execute(
+                    select(QuizQuestion, QuizAnswer)
+                    .outerjoin(
+                        QuizAnswer,
+                        and_(
+                            QuizAnswer.question_id == QuizQuestion.id,
+                            QuizAnswer.workspace_id == message.workspace_id,
+                            QuizAnswer.attempt_id == attempt.id,
+                        ),
+                    )
+                    .where(
+                        QuizQuestion.workspace_id == message.workspace_id,
+                        QuizQuestion.quiz_id == quiz.id,
+                        func.coalesce(QuizAnswer.score, 0) < 0.7,
+                    )
+                    .order_by(QuizQuestion.ordinal)
+                    .limit(3)
+                )
+            ).all()
+            summary = "\n".join(
+                f"第 {question.ordinal} 题：{question.stem[:240]}；"
+                f"你的答案：{str(answer.response)[:120] if answer else '未作答'}；"
+                f"参考答案：{str(question.answer)[:120]}；解析：{question.explanation[:400]}"
+                for question, answer in wrong
+            )[:1800]
+            return {
+                "quiz_id": str(quiz.public_id),
+                "attempt_id": str(attempt.public_id),
+                "title": quiz.title,
+                "weak_topics": attempt.weak_topics or [],
+                "summary": summary,
+            }
 
     async def finish_message(
         self, public_id: UUID, fence: UUID, answer: dict[str, Any], usage: dict[str, Any]
@@ -601,6 +795,10 @@ class SqlLearningStore:
     ) -> dict[str, Any]:
         async with self.sessions.begin() as session:
             workspace = await self._workspace(session, principal)
+            # Serialize replay lookup and creation, including requests using the same key.
+            await session.scalar(
+                select(WorkspaceModel.id).where(WorkspaceModel.id == workspace).with_for_update()
+            )
             requested_scope = {
                 "document_ids": sorted({str(item) for item in documents}),
                 "collection_ids": sorted({str(item) for item in collections}),
@@ -618,6 +816,7 @@ class SqlLearningStore:
                         code="IDEMPOTENCY_CONFLICT", message="请求标识已被使用", status_code=409
                     )
                 return quiz_view(existing, await self._question_count(session, existing.id))
+            await self._check_quiz_capacity(session, workspace)
             scope = await resolve_scope(session, workspace, documents, collections, self.profile)
             item = Quiz(
                 workspace_id=workspace,
@@ -715,23 +914,36 @@ class SqlLearningStore:
             quiz.lease_until = now + timedelta(seconds=LEASE_SECONDS)
             return quiz.public_id, quiz.fence, quiz.workspace_id, quiz.config, quiz.scope
 
+    async def _active_quiz(
+        self, session: AsyncSession, public_id: UUID, fence: UUID
+    ) -> Quiz | None:
+        quiz = await session.scalar(
+            select(Quiz)
+            .where(
+                Quiz.public_id == public_id,
+                Quiz.fence == fence,
+                Quiz.status == "processing",
+                Quiz.lease_until > datetime.now(UTC),
+            )
+            .with_for_update()
+        )
+        if quiz is None or not await snapshot_ready(
+            session, quiz.workspace_id, quiz.scope, quiz.profile
+        ):
+            return None
+        return quiz
+
+    async def ensure_quiz_active(self, public_id: UUID, fence: UUID) -> None:
+        async with self.sessions.begin() as session:
+            if await self._active_quiz(session, public_id, fence) is None:
+                raise RagFailure("AGENT_RUN_INACTIVE", "出题任务已停止或资料范围不可用")
+
     async def quiz_evidence(
         self, public_id: UUID, fence: UUID, topic_vector: list[float] | None = None, topic: str = ""
     ) -> list[Evidence]:
         async with self.sessions.begin() as session:
-            quiz = await session.scalar(
-                select(Quiz)
-                .where(
-                    Quiz.public_id == public_id,
-                    Quiz.fence == fence,
-                    Quiz.status == "processing",
-                    Quiz.lease_until > datetime.now(UTC),
-                )
-                .with_for_update()
-            )
-            if quiz is None or not await snapshot_ready(
-                session, quiz.workspace_id, quiz.scope, quiz.profile
-            ):
+            quiz = await self._active_quiz(session, public_id, fence)
+            if quiz is None:
                 return []
             if topic_vector is not None:
                 return await retrieve_sources(
@@ -746,22 +958,15 @@ class SqlLearningStore:
             return await quiz_sources(session, quiz.workspace_id, quiz.scope, quiz.profile)
 
     async def finish_quiz(
-        self, public_id: UUID, fence: UUID, questions: list[dict[str, Any]]
+        self,
+        public_id: UUID,
+        fence: UUID,
+        questions: list[dict[str, Any]],
+        usage: dict[str, Any] | None = None,
     ) -> None:
         async with self.sessions.begin() as session:
-            quiz = await session.scalar(
-                select(Quiz)
-                .where(
-                    Quiz.public_id == public_id,
-                    Quiz.fence == fence,
-                    Quiz.status == "processing",
-                    Quiz.lease_until > datetime.now(UTC),
-                )
-                .with_for_update()
-            )
-            if quiz is None or not await snapshot_ready(
-                session, quiz.workspace_id, quiz.scope, quiz.profile
-            ):
+            quiz = await self._active_quiz(session, public_id, fence)
+            if quiz is None:
                 return
             session.add_all(
                 QuizQuestion(
@@ -770,6 +975,7 @@ class SqlLearningStore:
                 for ordinal, question in enumerate(questions, start=1)
             )
             quiz.status = "ready"
+            quiz.generation_usage = usage
             quiz.fence = None
             quiz.lease_until = None
 

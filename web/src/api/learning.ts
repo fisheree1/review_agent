@@ -33,6 +33,13 @@ export interface ConversationMessage {
   status: "queued" | "processing" | "answered" | "insufficient" | "failed" | "cancelled";
   scope: ScopeDocument[];
   answer: { insufficient_evidence: boolean; claims: { text: string; citations: Citation[] }[] } | null;
+  task_result?: {
+    kind: "quiz" | "review" | "clarification";
+    text: string;
+    quiz_id: string | null;
+    attempt_id: string | null;
+    title: string | null;
+  } | null;
   feedback: "helpful" | "unhelpful" | "citation_inaccurate" | null;
   failure_message: string | null;
 }
@@ -44,6 +51,7 @@ export interface ConversationDetail extends Conversation {
 export type QuestionKind = "single" | "multiple" | "true_false" | "short";
 
 export interface QuizConfig {
+  generation_mode?: "standard" | "agent";
   type_counts: Record<QuestionKind, number>;
   difficulty: "easy" | "medium" | "hard";
   language: "zh" | "en";

@@ -112,6 +112,18 @@ jobs:
           docker compose stop worker
           docker compose exec -T api python -m scripts.verify_rag_flow
 
+      - name: Verify conversation tasks, Quiz, cancellation and ownership without cloud requests
+        run: docker compose exec -T api python -m scripts.verify_learning_flow
+
+      - name: Verify prior-schema upgrade preserves learning records
+        run: |
+          docker compose exec -T db psql -U review_agent_admin -d review_agent -v ON_ERROR_STOP=1 \
+            -c 'CREATE DATABASE review_agent_migration_check'
+          docker compose exec -T db psql -U review_agent_admin -d review_agent_migration_check -v ON_ERROR_STOP=1 \
+            -c 'CREATE EXTENSION vector'
+          docker compose run --rm -e POSTGRES_DB=review_agent_migration_check database-init \
+            python -m scripts.verify_quiz_agent_migration --isolated
+
       - name: Show logs after failure
         if: failure()
         run: docker compose logs --no-color

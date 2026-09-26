@@ -13,6 +13,8 @@
 7. [ADR-0001：PostgreSQL 文档任务](./adr/0001-postgresql-document-jobs.md)：当前后台任务选择与迁移门槛。
 8. [学习闭环实现与验收](./learning-core.md)：集合、多资料对话、回答反馈和 Quiz 的实际接口与验证边界。
 9. [单台云服务器上线与数据恢复](./production-operations.md)：HTTPS、秘密文件、异机备份、告警与恢复演练。
+10. [资料范围内自主规划 Agent](./agent-development-plan.md)：只读工具边界、开发阶段、预算与验收条件。
+11. [项目工程审查](./project-review.md)：当前工程基础、审查修复、验证证据与上线验收事项。
 
 ## 文档状态
 

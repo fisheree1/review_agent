@@ -118,12 +118,19 @@ class ConversationMessage(Base):
             [f"{S}.conversations.id", f"{S}.conversations.workspace_id"],
             ondelete="CASCADE",
         ),
+        ForeignKeyConstraint(
+            ["quiz_id", "workspace_id"],
+            [f"{S}.quizzes.id", f"{S}.quizzes.workspace_id"],
+            name="fk_conversation_message_quiz_scope",
+            ondelete="CASCADE",
+        ),
         CheckConstraint(
             "status IN ('queued','processing','answered','insufficient','failed','cancelled')",
             name="ck_conversation_messages_status",
         ),
         Index("ix_conversation_messages_claim", "status", "created_at"),
         Index("ix_conversation_messages_history", "workspace_id", "conversation_id", "created_at"),
+        Index("ix_conversation_messages_quiz", "workspace_id", "quiz_id"),
         {"schema": S},
     )
     id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
@@ -136,6 +143,8 @@ class ConversationMessage(Base):
     profile: Mapped[str] = mapped_column(String(160))
     status: Mapped[str] = mapped_column(String(20), default="queued")
     answer: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    task_result: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    quiz_id: Mapped[int | None] = mapped_column(BigInteger)
     usage: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     fence: Mapped[UUID | None]
     lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -192,6 +201,7 @@ class Quiz(Base):
     profile: Mapped[str] = mapped_column(String(160))
     status: Mapped[str] = mapped_column(String(20), default="queued")
     failure_code: Mapped[str | None] = mapped_column(String(64))
+    generation_usage: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     fence: Mapped[UUID | None]
     lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

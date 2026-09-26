@@ -344,6 +344,22 @@ kbd { display: inline-grid; min-width: 24px; min-height: 24px; place-items: cent
 .quiz-question fieldset { margin: 14px 0; padding: 12px; border: 1px solid var(--line); border-radius: 10px; }
 .quiz-option { margin: 10px 0; }
 .quiz-review { margin-top: 18px; padding-top: 12px; border-top: 1px solid var(--line); }
+.agent-new-conversation > summary, .agent-scope > summary { cursor: pointer; font-weight: 650; padding: 8px 0; }
+.agent-scope { margin-top: 12px; padding: 8px 14px; border: 1px solid var(--line); border-radius: 10px; }
+.agent-suggestions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 18px; }
+.agent-request { padding: 14px 16px; background: var(--surface-soft); border-radius: 10px; }
+.agent-request h3 { margin: 8px 0 0; font-size: 16px; line-height: 1.6; font-weight: 600; white-space: pre-wrap; overflow-wrap: anywhere; }
+.agent-progress { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+.agent-task-result { padding: 18px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+.agent-task-result h4 { margin: 8px 0; font-size: 20px; }
+.agent-task-result .learning-card { box-shadow: none; }
+.agent-task-result .quiz-question h2 { font-size: 18px; line-height: 1.6; }
+.agent-empty { padding: 20px 0; color: var(--text-soft); }
+.agent-composer { padding-top: 10px; }
+.agent-composer-footer { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; }
+.agent-composer-footer p { margin: 0; font-size: 12px; color: var(--text-soft); flex: 1 1 240px; }
+.agent-conversation .learning-message { overflow-wrap: anywhere; }
+@media (max-width: 560px) { .agent-task-result { padding: 12px; } .agent-task-result .learning-card { padding: 14px; } .agent-suggestions .button { flex: 1 1 40%; } }
 @media (max-width: 760px) { .learning-grid { grid-template-columns: 1fr; } .learning-page { width: min(100% - 28px, 680px); padding-top: 28px; } }
 @media (max-width: 560px) { .primary-nav { gap: 6px; margin-left: 6px; } .primary-nav a { font-size: 11px; } .learning-card { padding: 18px; } }
 .upload-file-list {

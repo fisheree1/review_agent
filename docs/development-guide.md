@@ -119,6 +119,8 @@ Pydantic schema 对长度、枚举、数量和嵌套深度设置上限。OpenAPI
 
 ## 9. 代码质量门禁
 
+Agent 改动同时验证 `uv run python -m scripts.evaluate_agent` 的版本化合成数据集；真实服务对比需显式 `--live`，不进入普通测试。当前统一对话任务需要先升级 `0013_conversation_tasks`（包含 `0012` Quiz 审计），空库与上一版本升级验证方法见 [Agent 开发计划](./agent-development-plan.md)。
+
 建议逐步引入：
 
 - Ruff：格式、导入和静态规则。

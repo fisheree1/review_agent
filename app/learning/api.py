@@ -64,12 +64,21 @@ class ConversationResponse(BaseModel):
     created_at: datetime
 
 
+class TaskResultResponse(BaseModel):
+    kind: Literal["quiz", "review", "clarification"]
+    text: str
+    quiz_id: UUID | None = None
+    attempt_id: UUID | None = None
+    title: str | None = None
+
+
 class MessageResponse(BaseModel):
     id: UUID
     question: str
     status: Literal["queued", "processing", "answered", "insufficient", "failed", "cancelled"]
     scope: list[ScopeDocument]
     answer: AnswerResponse | None
+    task_result: TaskResultResponse | None = None
     failure_code: str | None
     failure_message: str | None
     feedback: Literal["helpful", "unhelpful", "citation_inaccurate"] | None
@@ -97,6 +106,7 @@ class QuizConfigRequest(BaseModel):
     difficulty: Literal["easy", "medium", "hard"]
     language: Literal["zh", "en"]
     topic: str = Field(default="", max_length=120)
+    generation_mode: Literal["standard", "agent"] = "standard"
 
 
 class QuizRequest(ScopeRequest):
