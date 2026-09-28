@@ -1,6 +1,11 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
 
+const original = readFileSync(fileURLToPath(new URL("./preview-fixture.pdf", import.meta.url)));
+
 test("switch document scope, rate a cited answer, and complete an Agent Quiz", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
   const first = "11111111-1111-4111-8111-111111111111";
   const second = "22222222-2222-4222-8222-222222222222";
   const conversationId = "33333333-3333-4333-8333-333333333333";
@@ -28,7 +33,12 @@ test("switch document scope, rate a cited answer, and complete an Agent Quiz", a
     email: "learner@example.test", csrf_token: "csrf-e2e",
   } }));
 
-  await page.route("**/api/v1/documents**", (route) => route.fulfill({ json: { items: documents, next_cursor: null } }));
+  await page.route("**/api/v1/documents**", (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith("/original")) return route.fulfill({ body: original, contentType: "application/pdf" });
+    const document = documents.find((item) => path.endsWith(item.id));
+    return route.fulfill({ json: document ?? { items: documents, next_cursor: null } });
+  });
   await page.route("**/api/v1/collections**", (route) => route.fulfill({ json: [] }));
   await page.route("**/api/v1/conversations**", async (route) => {
     const url = new URL(route.request().url());
@@ -96,15 +106,27 @@ test("switch document scope, rate a cited answer, and complete an Agent Quiz", a
   const selectedScope = page.getByRole("group", { name: "资料范围", exact: true });
   await selectedScope.getByLabel("stats.pdf").check();
   await selectedScope.getByLabel("classes.pdf").check();
-  await page.getByRole("button", { name: "保存新范围" }).click();
-  await expect(page.getByText("2 份资料", { exact: true })).toBeVisible();
-  await page.getByText("资料范围", { exact: true }).first().click();
+  await page.getByRole("button", { name: "保存范围" }).click();
+  await expect(page.getByText("资料 · 2", { exact: true })).toBeVisible();
+  await page.getByText("资料 · 2", { exact: true }).click();
   await page.getByRole("group", { name: "资料范围", exact: true }).getByLabel("stats.pdf").uncheck();
-  await page.getByRole("button", { name: "保存新范围" }).click();
-  await expect(page.getByText("1 份资料", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "保存范围" }).click();
+  await expect(page.getByText("资料 · 1", { exact: true })).toBeVisible();
   await page.getByLabel("发送任务或问题").fill("Why use the median?");
   await page.getByRole("button", { name: "发送", exact: true }).click();
   await expect(page.getByText("A class initializes an object.")).toBeVisible();
+  await page.getByText("来源 · 1").click();
+  await page.getByRole("button", { name: "classes.pdf · 第 1 页" }).click();
+  await expect(page.getByRole("complementary", { name: "原文预览" })).toBeVisible();
+  await expect(page.getByRole("img", { name: "PDF 原文件第 1 页" })).toBeVisible();
+  await page.getByRole("button", { name: "关闭原文预览" }).click();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByRole("button", { name: "classes.pdf · 第 1 页" }).click();
+  await expect(page.getByRole("dialog", { name: "原文预览" })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("dialog", { name: "原文预览" })).toHaveCount(0);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.setViewportSize({ width: 1440, height: 900 });
   await page.getByRole("button", { name: "有帮助" }).click();
   await expect(page.getByText("已反馈：有帮助")).toBeVisible();
 

@@ -63,6 +63,9 @@ describe("ReaderPage", () => {
     renderReader();
 
     expect(await screen.findByLabelText("PDF 原文件第 1 页")).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Data Profiling.pdf" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Data Profiling.pdf" }).closest("header")).toHaveTextContent("2 页");
+    await userEvent.click(screen.getByLabelText("资料操作"));
     expect(screen.getByRole("button", { name: "用这份资料生成 5 题" })).toBeVisible();
     expect(screen.queryByRole("button", { name: "提取文字" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "放大正文字号" })).not.toBeInTheDocument();
@@ -76,7 +79,7 @@ describe("ReaderPage", () => {
     renderReader();
 
     expect(await screen.findByRole("heading", { name: "暂不支持预览" })).toBeVisible();
-    expect(screen.getByText(/这份旧资料不是 PDF/)).toBeVisible();
+    expect(screen.getByText("仅支持 PDF 预览。")).toBeVisible();
     expect(screen.queryByLabelText("PDF 原文件第 1 页")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "用这份资料生成 5 题" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "下一页" })).not.toBeInTheDocument();
@@ -88,7 +91,7 @@ describe("ReaderPage", () => {
 
     expect(await screen.findByLabelText("PDF 原文件第 1 页")).toBeVisible();
     expect(screen.queryByRole("button", { name: "用这份资料生成 5 题" })).not.toBeInTheDocument();
-    expect(screen.getByText(/原文件可以先行预览/)).toBeVisible();
+    expect(screen.getByText("等待处理")).toBeVisible();
   });
 
   it("keeps PDF preview available after parsing fails and offers retry", async () => {

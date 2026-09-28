@@ -122,7 +122,6 @@ export function QuizAttemptPanel({ quizId, attemptId, weakOnlyInitially = false,
         })}
         {!complete && attempt.data.status === "in_progress" ? <button className="button button--secondary" type="button" onClick={() => { unansweredAtFilter.current = new Set(reviewedQuestions.filter((question) => !isAnswered(responses[question.id])).map((question) => question.id)); setUnansweredOnly(!unansweredOnly); }}>{unansweredOnly ? "显示全部题目" : "只看未答题"}</button> : null}
       </nav> : null}
-      {unansweredOnly && visibleQuestions?.length ? <p className="learning-scope">只显示本次筛选的未答题，作答后保留以便修改。</p> : null}
       {unansweredOnly && visibleQuestions?.length === 0 ? <p role="status">所有题目已作答，可以提交。</p> : null}
       {attempt.data?.status === "in_progress" ? <p role="status">{draft.status === "saving" ? "正在保存，请保存完成后离开…" : draft.status === "saved" ? "作答已保存" : "作答会自动保存"}</p> : null}
       {draft.error ? <div role="alert"><p>{draft.error}。本页草稿仍保留，提交前必须保存成功。</p>

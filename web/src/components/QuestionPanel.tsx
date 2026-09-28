@@ -45,9 +45,7 @@ export function QuestionPanel({ documentId, filename, onCitation }: Props) {
   const busy = history.data?.some(isAnswering) || asking.isPending;
   const indexBusy = ["queued", "processing"].includes(index.data?.status ?? "");
   return (
-    <section aria-labelledby="questions-title" className="question-panel">
-      <h2 id="questions-title">与资料一起思考</h2>
-      <p className="question-panel__scope">回答范围：仅「{filename}」</p>
+    <section aria-label={`仅在“${filename}”中提问`} className="question-panel">
       {index.isPending ? <p role="status">正在检查问答准备状态…</p> : null}
       {index.data?.status === "not_indexed" || index.data?.status === "failed" ? (
         <div className="question-panel__setup">
@@ -67,7 +65,6 @@ export function QuestionPanel({ documentId, filename, onCitation }: Props) {
       </form>
       <div aria-live="polite" aria-atomic="false">
         {history.isPending ? <p role="status">正在读取提问记录…</p> : null}
-        {history.data?.length === 0 && index.data?.status === "ready" ? <p>资料已准备好。提出第一个问题，回答会附上可核对的原文。</p> : null}
         {history.data?.map((item) => (
           <article className="question-answer" key={item.id}>
             <h3>{item.question}</h3>

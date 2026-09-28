@@ -35,11 +35,18 @@ test("PDF preview opens directly while parsing without requesting extracted text
   await page.goto(`/documents/${documentId}`);
   const firstPage = page.getByRole("img", { name: "PDF 原文件第 1 页" });
   await expect(firstPage).toBeVisible();
+  expect(await firstPage.evaluate((canvas) => canvas.getBoundingClientRect().top)).toBeLessThan(700);
   await expect.poll(() => firstPage.evaluate((canvas: HTMLCanvasElement) => canvas.width)).toBeGreaterThan(0);
 
   await expect(page.getByText("第 1 / 2 页")).toBeVisible();
+  await page.getByRole("region", { name: "第 2 页" }).evaluate((element) => element.scrollIntoView({ block: "start", behavior: "instant" }));
+  await expect(page.getByText("第 2 / 2 页")).toBeVisible();
+  await expect(page).toHaveURL(/unit=2/);
+  await page.getByRole("region", { name: "第 1 页" }).evaluate((element) => element.scrollIntoView({ block: "start", behavior: "instant" }));
+  await expect(page.getByText("第 1 / 2 页")).toBeVisible();
   await page.getByRole("button", { name: "下一页" }).click();
   await expect(page.getByRole("img", { name: "PDF 原文件第 2 页" })).toBeVisible();
+  await expect.poll(() => page.getByRole("region", { name: "第 2 页" }).evaluate((element) => element.getBoundingClientRect().top)).toBeLessThan(500);
   expect(contentRequests).toBe(0);
   expect(originalRequests).toBeGreaterThan(0);
   expect(contentRequests).toBe(0);

@@ -3,13 +3,14 @@ import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tansta
 import { Link, useNavigate, useParams } from "react-router-dom";
 
 import type { DocumentSummary } from "../api/documents";
+import type { Citation } from "../api/rag";
 import {
   askConversation, cancelConversationMessage, createCollection, createConversation,
   deleteCollection, getConversation, listCollections, listConversations,
   rateConversationMessage, setCollectionDocuments, setConversationScope,
-  type Collection, type ScopeChoice,
+  type Collection, type ConversationMessage, type ScopeChoice,
 } from "../api/learning";
-import { SourcePreview } from "../components/SourcePreview";
+import { StudySourcePanel } from "../components/StudySourcePanel";
 import { ConversationSidebar } from "../components/ConversationSidebar";
 import { ConversationMessages } from "../components/ConversationMessages";
 import { Icon } from "../components/Icon";
@@ -29,6 +30,24 @@ const taskExamples = [
   ["讲解错题", "解释我最近一次练习的错题，并展示解析和来源。"],
   ["薄弱点练习", "根据我最近练习的薄弱知识点，再生成 5 道中等难度单选题。"],
 ] as const;
+
+function StudyAnswer({ message, onSource }: {
+  message: ConversationMessage;
+  onSource: (citation: Citation, filename: string) => void;
+}) {
+  if (!message.answer) return null;
+  const sources = Array.from(new Map(message.answer.claims.flatMap((claim) => claim.citations)
+    .map((citation) => [citation.source_id, citation])).values());
+  return <div className="study-answer">
+    {message.answer.claims.map((claim, index) => <p key={index}>{claim.text}</p>)}
+    {sources.length ? <details className="study-sources"><summary>来源 · {sources.length}</summary>
+      <div>{sources.map((citation) => {
+        const filename = message.scope.find((item) => item.document_id === citation.document_id)?.filename ?? "原文";
+        return <button className="study-sources__item" key={citation.source_id} onClick={() => onSource(citation, filename)} type="button">{filename} · 第 {citation.unit} 页</button>;
+      })}</div>
+    </details> : null}
+  </div>;
+}
 
 function CollectionRow({ collection, documents, refresh }: {
   collection: Collection; documents: DocumentSummary[]; refresh: () => void;
@@ -98,7 +117,10 @@ export function StudyPage() {
   const [historyCollapsed, setHistoryCollapsed] = useState(false);
   const [collectionName, setCollectionName] = useState("");
   const [activeScope, setActiveScope] = useState<ScopeChoice>(emptyScope);
+  const [scopeOpen, setScopeOpen] = useState(false);
   const [question, setQuestion] = useState("");
+  const [selectedSource, setSelectedSource] = useState<{ citation: Citation; filename: string } | null>(null);
+  const closeSource = useCallback(() => setSelectedSource(null), []);
   const askKey = useRef<{ fingerprint: string; key: string } | null>(null);
   const composer = useRef<HTMLTextAreaElement>(null);
   const createKey = useRef<{ fingerprint: string; key: string } | null>(null);
@@ -112,6 +134,10 @@ export function StudyPage() {
   useEffect(() => {
     setActiveScope({ document_ids: detail.data?.scope.map((item) => item.document_id) ?? [], collection_ids: [] });
   }, [conversationId, scopeIdentity]);
+  useEffect(() => {
+    if (detail.data) setScopeOpen(detail.data.scope.length === 0);
+  }, [conversationId, scopeIdentity]);
+  useEffect(() => setSelectedSource(null), [conversationId]);
 
   const createCollectionMutation = useMutation({
     mutationFn: () => createCollection(collectionName, ""),
@@ -129,7 +155,7 @@ export function StudyPage() {
   const openCreate = () => { if (!createConversationMutation.isPending) createConversationMutation.mutate(); };
   const switchScope = useMutation({
     mutationFn: () => setConversationScope(conversationId!, activeScope),
-    onSuccess: refreshConversations,
+    onSuccess: () => { setScopeOpen(false); refreshConversations(); },
   });
   const ask = useMutation({
     mutationFn: (request: string) => {
@@ -170,28 +196,18 @@ export function StudyPage() {
       <header className="learning-heading study-heading"><h1>学习空间</h1>{!firstUse ? <button className="icon-button" aria-label={historyCollapsed ? "展开对话列表" : "收起对话列表"} aria-expanded={!historyCollapsed} aria-controls="conversation-history" onClick={() => setHistoryCollapsed((value) => !value)} type="button"><Icon name="panel" /></button> : null}</header>
       {createConversationMutation.error ? <p role="alert">创建失败，请重试。<button className="button button--secondary" type="button" onClick={openCreate}>重试新建</button></p> : null}
       {error ? <ErrorState message={error.message} onRetry={() => { void refreshDocuments(); refreshCollections(); refreshConversations(); if (conversationId) void detail.refetch(); }} /> : null}
-      <div className={`learning-grid study-layout${historyCollapsed || firstUse ? " study-layout--history-collapsed" : ""}`}>
+      <div className={`learning-grid study-layout${historyCollapsed || firstUse ? " study-layout--history-collapsed" : ""}${selectedSource ? " study-layout--source-open" : ""}`}>
         <div className="learning-content">
           {conversationId ? <section className="learning-card agent-conversation" aria-label="当前对话">
             {detail.isPending ? <p role="status">正在打开对话…</p> : null}
             {detail.data ? <>
-              <div className="conversation-heading"><h2>{detail.data.title}</h2>
-              <p className="learning-scope">{detail.data.scope.length ? `${detail.data.scope.length} 份资料` : "选择资料后开始"}</p>
-              <details className="agent-scope" open={detail.data.scope.length === 0 ? true : undefined}><summary>{detail.data.scope.length ? "资料范围" : "选择资料"}</summary>
-                <ScopePicker collections={collections.data ?? []} documents={documents} hasMore={Boolean(nextCursor)} label="资料范围" loading={documentsLoading} onChange={setActiveScope} selectedLabels={detail.data.scope.map((item) => ({ id: item.document_id, filename: item.filename }))} value={activeScope} />
-                {nextCursor ? <button className="button button--secondary" onClick={() => void loadMore()} type="button">加载更多资料</button> : null}
-                {switchScope.error ? <p role="alert">{switchScope.error.message}，当前范围未改变，可重试保存。</p> : null}
-                <button className="button button--secondary" disabled={switchScope.isPending} onClick={() => switchScope.mutate()} type="button">保存新范围</button>
-              </details>
-              </div>
               <ConversationMessages key={conversationId} updateKey={JSON.stringify(detail.data.messages.map((message) => [message.id, message.status, message.answer, message.task_result]))}>{detail.data.messages.length === 0 ? <div className="agent-empty">
-                <p>{detail.data.scope.length ? "可以从这些任务开始" : "先选择资料，再开始对话"}</p>
+                {detail.data.scope.length === 0 ? <p>选择资料后开始对话</p> : null}
                 {detail.data.scope.length ? <div className="agent-suggestions" aria-label="任务示例">{taskExamples.map(([label, request]) =>
                   <button className="text-action" disabled={ask.isPending || legacyWorking} key={label} onClick={() => draftTask(request)} type="button">{label}</button>)}</div> : null}
               </div> : null}
                 {detail.data.messages.map((message) => <article className="learning-message" key={message.id}>
                   <div className="agent-request"><h3>{message.question}</h3></div>
-                  <details className="message-scope"><summary>资料来源 · {message.scope.length} 份</summary><p className="learning-scope">{message.scope.map((item) => item.filename).join("、")}</p></details>
                   {!message.run_id && (message.status === "queued" || message.status === "processing") ? <div className="agent-progress"><p role="status">{message.task_result?.kind === "quiz" ? message.task_result.text : "正在规划任务并寻找依据…"}</p>
                     <button className="button button--secondary" disabled={cancel.isPending} onClick={() => cancel.mutate(message.id)} type="button">停止任务</button></div> : null}
                   {message.status === "cancelled" ? <p role="status">已停止任务。</p> : null}
@@ -199,10 +215,7 @@ export function StudyPage() {
                     <button className="button button--secondary" onClick={() => draftTask(message.question)} type="button">重新编辑任务</button></div> : null}
                   {message.status === "insufficient" ? <p>在所选资料中找不到足够依据。</p> : null}
                   <ConversationTaskResult message={message} onRequest={draftTask} />
-                  {message.answer?.claims.map((claim, index) => <div key={index}>
-                    <p>{claim.text}</p>
-                    {claim.citations.map((citation) => <SourcePreview key={citation.source_id} source={citation} />)}
-                  </div>)}
+                  <StudyAnswer message={message} onSource={(citation, filename) => setSelectedSource({ citation, filename })} />
                   {message.answer && (message.status === "answered" || message.status === "insufficient") ?
                     <div className="learning-actions" aria-label="回答反馈">
                       {message.feedback ? <p>已反馈：{message.feedback === "helpful" ? "有帮助" : message.feedback === "unhelpful" ? "无帮助" : "引用不准确"}</p>
@@ -216,10 +229,16 @@ export function StudyPage() {
               {cancel.error ? <p role="alert">{cancel.error.message}，可再次停止任务。</p> : null}
               {feedback.error ? <p role="alert">{feedback.error.message}，可重新提交反馈。</p> : null}
               <form className="agent-composer" onSubmit={(event) => { event.preventDefault(); if (canSend) ask.mutate(question); }}>
+                <details className="agent-scope" onToggle={(event) => setScopeOpen(event.currentTarget.open)} open={scopeOpen}><summary>{detail.data.scope.length ? `资料 · ${detail.data.scope.length}` : "选择资料"}</summary>
+                  <ScopePicker collections={collections.data ?? []} documents={documents} hasMore={Boolean(nextCursor)} label="资料范围" loading={documentsLoading} onChange={setActiveScope} selectedLabels={detail.data.scope.map((item) => ({ id: item.document_id, filename: item.filename }))} value={activeScope} />
+                  {nextCursor ? <button className="button button--secondary" onClick={() => void loadMore()} type="button">加载更多资料</button> : null}
+                  {switchScope.error ? <p role="alert">{switchScope.error.message}，可重试保存。</p> : null}
+                  <button className="button button--secondary" disabled={switchScope.isPending} onClick={() => switchScope.mutate()} type="button">保存范围</button>
+                </details>
                 <label className="visually-hidden" htmlFor="conversation-question">发送任务或问题</label>
-                <textarea placeholder="提问或安排学习任务…" aria-describedby="agent-composer-help" ref={composer} id="conversation-question" name="conversation-question" autoComplete="off" maxLength={2000} onChange={(event) => setQuestion(event.target.value)} rows={2} value={question}
+                <textarea placeholder="提问或安排学习任务…" ref={composer} id="conversation-question" name="conversation-question" autoComplete="off" maxLength={2000} onChange={(event) => setQuestion(event.target.value)} rows={2} value={question}
                   onKeyDown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key === "Enter" && !event.nativeEvent.isComposing) { event.preventDefault(); if (canSend) ask.mutate(question); } }} />
-                <div className="agent-composer-footer"><p id="agent-composer-help">⌘ / Ctrl + Enter</p>
+                <div className="agent-composer-footer">
                   <button className="button button--primary" disabled={!canSend} type="submit">{ask.isPending ? "正在发送…" : "发送"}</button></div>
               </form>
             </> : null}
@@ -247,6 +266,7 @@ export function StudyPage() {
             {collections.data?.map((collection) => <CollectionRow key={collection.id} collection={collection} documents={documents} refresh={refreshCollections} />)}
           </details>
         </aside> : null}
+        {selectedSource ? <StudySourcePanel filename={selectedSource.filename} onClose={closeSource} source={selectedSource.citation} /> : null}
       </div>
     </main>
   </div>;

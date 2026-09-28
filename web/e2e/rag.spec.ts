@@ -48,7 +48,7 @@ test("ask within a document, inspect a citation with the keyboard, and open its 
     await page.locator("main").evaluate((main) => main.getBoundingClientRect().left),
   );
   await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(readingPosition);
-  await expect(page.getByText("回答范围：仅「Synthetic learning notes.pdf」")).toBeVisible();
+  await expect(questions.getByRole("region", { name: "仅在“Synthetic learning notes.pdf”中提问" })).toBeVisible();
   await page.getByRole("textbox").fill("Why use the median?");
   await page.getByRole("button", { name: "提问", exact: true }).focus();
   await page.keyboard.press("Enter");

@@ -35,7 +35,7 @@ export function ReferencePanel({
       role={isModal ? "dialog" : undefined}
     >
       <div className="reference-panel__header">
-        <div><span className="eyebrow">Citation locator</span><h2>来源定位</h2></div>
+        <h2>来源定位</h2>
         <button aria-label="关闭引用面板" className="icon-button reference-panel__close" onClick={onClose} type="button"><Icon name="close" /></button>
       </div>
       <section className="citation-preview" aria-label="回答引用原文">

@@ -75,9 +75,9 @@ test("collapse navigation, organize a direct conversation, and check in once", a
   await expect(page.getByRole("button", { name: "发送", exact: true })).toBeDisabled();
   await page.setViewportSize({ width: 390, height: 844 });
   await page.getByRole("group", { name: "资料范围" }).getByLabel("统计.pdf").check();
-  await expect(page.getByRole("button", { name: "保存新范围" })).toBeInViewport();
-  await page.getByRole("button", { name: "保存新范围" }).click();
-  await expect(page.getByText("1 份资料", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "保存范围" })).toBeInViewport();
+  await page.getByRole("button", { name: "保存范围" }).click();
+  await expect(page.getByText("资料 · 1", { exact: true })).toBeVisible();
   await page.setViewportSize({ width: 1280, height: 800 });
 
   await page.getByRole("button", { name: "新建分组" }).click();
