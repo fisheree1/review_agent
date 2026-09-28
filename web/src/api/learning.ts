@@ -57,7 +57,7 @@ export interface QuizConfig {
   generation_mode?: "standard" | "agent";
   type_counts: Record<QuestionKind, number>;
   difficulty: "easy" | "medium" | "hard";
-  language: "zh" | "en";
+  language: "zh" | "en" | "zh-en";
   topic: string;
 }
 

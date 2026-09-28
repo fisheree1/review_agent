@@ -24,20 +24,24 @@ test("quiz keeps standard mode by default and submits the keyboard-selected expe
   </QueryClientProvider>);
   await user.click(screen.getByText("更多设置"));
   const mode = screen.getByRole("button", { name: /出题方式/ });
+  const language = screen.getByRole("button", { name: /语言/ });
   expect(mode).toHaveTextContent("标准出题");
   await user.type(screen.getByRole("textbox", { name: "标题" }), "统计复习");
   await user.click(screen.getByRole("checkbox", { name: "stats.pdf" }));
   mode.focus();
   expect(mode).toHaveFocus();
   await user.keyboard("{ArrowDown}{ArrowDown}{Enter}");
+  language.focus();
+  await user.keyboard("{ArrowDown}{End}{Enter}");
   await user.click(screen.getByRole("button", { name: "生成 5 题" }));
   await waitFor(() => expect(learning.createQuiz).toHaveBeenCalledWith(
-    "统计复习", expect.objectContaining({ generation_mode: "agent" }),
+    "统计复习", expect.objectContaining({ generation_mode: "agent", language: "zh-en" }),
     { document_ids: ["document"], collection_ids: [] }, expect.any(String),
   ));
   expect(await screen.findByText("暂时无法生成，请重试")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "生成 5 题" })).toBeEnabled();
   expect(mode).toHaveTextContent("自主规划出题（实验）");
+  expect(language).toHaveTextContent("中英对照");
 });
 
 test("quiz requires a source and a valid question count before generation", async () => {

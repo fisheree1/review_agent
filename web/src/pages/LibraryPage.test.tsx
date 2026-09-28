@@ -11,20 +11,26 @@ import { LibraryPage } from "./LibraryPage";
 vi.mock("../api/documents", async (original) => ({ ...(await original<typeof documents>()), listDocuments: vi.fn() }));
 vi.mock("../api/learning", async (original) => ({ ...(await original<typeof learning>()), listCollections: vi.fn(), getLearningResume: vi.fn(), createCollection: vi.fn(), getStudyCalendar: vi.fn(), checkinToday: vi.fn() }));
 vi.mock("../components/AppHeader", () => ({ AppHeader: () => <header>Review Agent</header> }));
-vi.mock("../components/UploadPanel", () => ({ UploadPanel: () => <section>上传学习资料</section> }));
+vi.mock("../components/UploadPanel", () => ({ UploadPanel: () => <section id="upload-materials" tabIndex={-1}>上传学习资料</section> }));
 afterEach(() => { cleanup(); vi.clearAllMocks(); });
 const fixture = (id: string, filename: string, status: documents.DocumentStatus): documents.DocumentSummary => ({
   id, filename, status, media_type: "application/pdf", byte_size: 100, page_count: 1, content_count: 1,
   created_at: "2026-09-23T00:00:00Z", updated_at: "2026-09-23T00:00:00Z", failure_code: null, failure_message: null,
 });
-function show() {
+function show(entry = "/") {
   vi.mocked(learning.listCollections).mockResolvedValue([]);
   vi.mocked(learning.getLearningResume).mockResolvedValue({ conversation: { id: "conversation", title: "统计复习", working: true }, attempt: { id: "attempt", quiz_id: "quiz", title: "统计练习", status: "in_progress" } });
   vi.mocked(learning.getStudyCalendar).mockResolvedValue({ month: "2026-09", today: "2026-09-28", timezone: "Asia/Singapore", dates: [], checked_today: false, streak: 0, total: 0 });
   render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })}>
-    <MemoryRouter><LibraryPage /></MemoryRouter>
+    <MemoryRouter initialEntries={[entry]}><LibraryPage /></MemoryRouter>
   </QueryClientProvider>);
 }
+
+test("upload deep link focuses the first task", async () => {
+  vi.mocked(documents.listDocuments).mockResolvedValue({ items: [], next_cursor: null });
+  show("/#upload-materials");
+  expect(screen.getByText("上传学习资料")).toHaveFocus();
+});
 
 test("search requests all matching documents from the server and resets pagination when cleared", async () => {
   vi.mocked(documents.listDocuments).mockImplementation(async (cursor, filters) => ({

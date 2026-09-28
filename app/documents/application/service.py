@@ -23,7 +23,7 @@ from app.documents.application.ports import (
 from app.documents.application.upload_validation import (
     PDF_MEDIA_TYPE,
     StagedUpload,
-    stage_document_upload,
+    stage_pdf_upload,
 )
 from app.documents.domain.entities import (
     Document,
@@ -90,7 +90,7 @@ class DocumentService:
         source: UploadSource,
         idempotency_key: str | None,
     ) -> UploadResult:
-        staged = await stage_document_upload(source, max_bytes=self._max_upload_bytes)
+        staged = await stage_pdf_upload(source, max_bytes=self._max_upload_bytes)
         try:
             return await self._persist_upload(
                 workspace_public_id=workspace_public_id,

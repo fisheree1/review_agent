@@ -188,10 +188,6 @@ class WorkerSettings(DatabaseSettings):
     pdf_parser_timeout_seconds: int = Field(default=300, gt=0)
     max_pdf_pages: int = Field(default=500, gt=0)
     max_pdf_characters: int = Field(default=5_000_000, gt=0)
-    office_parser_timeout_seconds: int = Field(default=60, gt=0)
-    max_office_units: int = Field(default=1_000, gt=0)
-    max_office_characters: int = Field(default=5_000_000, gt=0)
-    max_office_uncompressed_bytes: int = Field(default=100 * 1024 * 1024, gt=0)
     worker_heartbeat_seconds: float = Field(default=5.0, gt=0)
 
 

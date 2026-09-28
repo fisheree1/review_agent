@@ -67,4 +67,19 @@ test("empty conversation keeps draft but refuses sending until a source is selec
   await user.keyboard("{Control>}{Enter}{/Control}");
   expect(screen.getByRole("button", { name: "发送" })).toBeDisabled();
   expect(learning.askConversation).not.toHaveBeenCalled();
+  expect(screen.getByRole("link", { name: "前往资料库上传 PDF" })).toHaveAttribute("href", "/#upload-materials");
+});
+
+test("a first-time visitor without materials is sent to upload before creating a conversation", async () => {
+  vi.mocked(learning.listConversationGroups).mockResolvedValue([]);
+  vi.mocked(learning.listCollections).mockResolvedValue([]);
+  vi.mocked(learning.listConversations).mockResolvedValue([]);
+  render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+    <MemoryRouter initialEntries={["/study"]}><Routes><Route path="/study" element={<StudyPage />} /></Routes></MemoryRouter>
+  </QueryClientProvider>);
+
+  expect(await screen.findByRole("heading", { name: "先上传一份 PDF" })).toBeVisible();
+  expect(screen.getByRole("link", { name: "前往资料库上传 PDF" })).toHaveAttribute("href", "/#upload-materials");
+  expect(screen.queryByRole("button", { name: "开始新对话" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "新建对话" })).not.toBeInTheDocument();
 });

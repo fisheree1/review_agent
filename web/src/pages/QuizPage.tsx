@@ -17,14 +17,14 @@ const initialConfig: QuizConfig = {
   difficulty: "medium", language: "zh", topic: "",
 };
 const difficultyOptions = [{ value: "easy", label: "入门" }, { value: "medium", label: "中等" }, { value: "hard", label: "进阶" }] as const;
-const languageOptions = [{ value: "zh", label: "中文" }, { value: "en", label: "English" }] as const;
+const languageOptions = [{ value: "zh", label: "中文" }, { value: "en", label: "English" }, { value: "zh-en", label: "中英对照" }] as const;
 const generationOptions = [{ value: "standard", label: "标准出题" }, { value: "agent", label: "自主规划出题（实验）" }] as const;
 
 export function QuizPage() {
   const { quizId } = useParams();
   const navigate = useNavigate();
   const cache = useQueryClient();
-  const { documents, error: documentsError, nextCursor, loadMore, refresh: refreshDocuments } = useDocuments();
+  const { documents, error: documentsError, isLoading: documentsLoading, nextCursor, loadMore, refresh: refreshDocuments } = useDocuments();
   const collections = useQuery({ queryKey: ["collections"], queryFn: listCollections });
   const quizzes = useQuery({ queryKey: ["quizzes"], queryFn: listQuizzes });
   const quiz = useQuery({
@@ -71,7 +71,7 @@ export function QuizPage() {
               <div className="quiz-form-grid"><div className="quiz-form-source">
               <label htmlFor="quiz-title">标题</label>
               <input placeholder="例如：统计学第一章练习…" id="quiz-title" name="quiz-title" autoComplete="off" maxLength={160} onChange={(event) => setTitle(event.target.value)} value={title} />
-              <ScopePicker collections={collections.data ?? []} documents={documents} label="出题资料范围" onChange={setScope} value={scope} />
+              <ScopePicker collections={collections.data ?? []} documents={documents} hasMore={Boolean(nextCursor)} label="出题资料范围" loading={documentsLoading} onChange={setScope} value={scope} />
               {nextCursor ? <button className="button button--secondary" onClick={() => void loadMore()} type="button">加载更多资料</button> : null}
               </div><div className="quiz-form-settings">
               <fieldset className="quiz-settings"><legend>题型与数量（总计最多 10 题）</legend>
@@ -86,6 +86,7 @@ export function QuizPage() {
               <input id="quiz-topic" name="quiz-topic" autoComplete="off" maxLength={120} value={config.topic} onChange={(event) => setConfig({ ...config, topic: event.target.value })} />
               <details className="quiz-advanced"><summary>更多设置</summary>
               <SelectField id="quiz-language" name="quiz-language" label="语言" value={config.language} onChange={(value) => setConfig((current) => ({ ...current, language: value as QuizConfig["language"] }))} options={languageOptions} />
+              <p>中英对照会在每道题的题干、选项、答案和解析中同时显示中文与英文。</p>
               <SelectField id="quiz-generation-mode" name="quiz-generation-mode" label="出题方式" descriptionId="quiz-generation-help" value={config.generation_mode ?? "standard"} onChange={(value) => setConfig((current) => ({ ...current, generation_mode: value as QuizConfig["generation_mode"] }))} options={generationOptions} />
               <p id="quiz-generation-help">自主规划出题可能耗时更长，题目仍会检查答案与来源。</p>
               </details>

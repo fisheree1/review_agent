@@ -117,7 +117,7 @@ class FeedbackResponse(FeedbackRequest):
 class QuizConfigRequest(BaseModel):
     type_counts: dict[str, int]
     difficulty: Literal["easy", "medium", "hard"]
-    language: Literal["zh", "en"]
+    language: Literal["zh", "en", "zh-en"]
     topic: str = Field(default="", max_length=120)
     generation_mode: Literal["standard", "agent"] = "standard"
 

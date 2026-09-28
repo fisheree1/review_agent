@@ -40,7 +40,7 @@ export function DocumentList({
   onLoadMore,
   selectedIds, selectionDisabled, onToggleSelection,
   emptyTitle = "资料库还是空的",
-  emptyDescription = "上传第一份 PDF、DOCX 或 PPTX，解析完成后即可按来源位置阅读。",
+  emptyDescription = "上传第一份 PDF，解析完成后即可按页阅读和提问。",
 }: DocumentListProps) {
   if (isLoading) {
     return (
@@ -64,7 +64,8 @@ export function DocumentList({
     <>
       <div className={`document-grid${documents.length > 50 ? " document-grid--large" : ""}`}>
         {documents.map((document) => {
-          const canOpen = document.status === "ready" || document.status === "failed";
+          const canOpen = document.status === "ready" || document.status === "failed" ||
+            (document.media_type === "application/pdf" && document.status !== "deleting");
           return (
             <article className={`document-card${selectedIds ? " document-card--selecting" : ""}`} key={document.id}>
               {selectedIds ? <label className="document-selection"><input aria-label={`选择 ${document.filename}`} type="checkbox" checked={selectedIds.includes(document.id)} disabled={selectionDisabled || (selectedIds.length >= 100 && !selectedIds.includes(document.id))} onChange={() => onToggleSelection?.(document.id)} /></label> : null}
@@ -86,8 +87,8 @@ export function DocumentList({
                 ) : null}
               </div>
               {canOpen ? (
-                <Link aria-label={`${document.status === "ready" ? "阅读" : "查看失败原因"} ${document.filename}`} className="document-card__link" to={`/documents/${document.id}`}>
-                  <span>{document.status === "ready" ? "继续阅读" : "查看并重试"}</span><Icon name="chevronRight" />
+                <Link aria-label={`${document.status === "failed" ? "查看失败原因" : "预览"} ${document.filename}`} className="document-card__link" to={`/documents/${document.id}`}>
+                  <span>{document.status === "failed" ? "查看并重试" : document.media_type === "application/pdf" ? "预览 PDF" : "查看资料"}</span><Icon name="chevronRight" />
                 </Link>
               ) : (
                 <span className="document-card__wait">后台处理中</span>

@@ -83,6 +83,13 @@ test("desktop panels keep files and conversation actions in view; narrow screens
   await page.getByRole("button", { name: "重试新建" }).click();
   await expect(page).toHaveURL(`/study/${conversation.id}`);
   await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/");
+  const uploadPosition = await page.getByRole("button", { name: "选择文件", exact: true }).boundingBox();
+  const listPosition = await page.getByRole("region", { name: "资料列表" }).boundingBox();
+  expect(uploadPosition).not.toBeNull();
+  expect(listPosition).not.toBeNull();
+  expect(uploadPosition!.y).toBeLessThan(listPosition!.y);
+  await page.goto(`/study/${conversation.id}`);
   const menu = page.getByRole("button", { name: "打开主导航" });
   await menu.focus(); await page.keyboard.press("Enter");
   const navigation = page.getByRole("dialog", { name: "学习导航" });

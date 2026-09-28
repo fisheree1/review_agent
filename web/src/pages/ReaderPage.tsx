@@ -9,6 +9,7 @@ import { AppHeader } from "../components/AppHeader";
 import { DeleteDocumentDialog } from "../components/DeleteDocumentDialog";
 import { ErrorState } from "../components/ErrorState";
 import { Icon } from "../components/Icon";
+import { QuickQuizAction } from "../components/QuickQuizAction";
 import { QuestionPanel } from "../components/QuestionPanel";
 import { ReferencePanel } from "../components/ReferencePanel";
 import { ShortcutsDialog } from "../components/ShortcutsDialog";
@@ -256,14 +257,15 @@ export function ReaderPage() {
                     <span className="eyebrow">{documentTypeLabel(document.media_type)}{isPdf && pageCount > 0 ? ` · ${pageCount} 页` : ""}</span>
                     <h1>{document.filename}</h1>
                     {historicalVersion ? <p role="status">正在查看该资料的原文件。引用所用的解析版本保留在链接中。</p> : null}
-                    {isProcessing(document.status) ? <div role="status"><StatusBadge status={document.status} /><p>{processingMessage(document.status)}</p></div> : null}
+                    {isProcessing(document.status) ? <div role="status"><StatusBadge status={document.status} /><p>{isPdf ? processingMessage(document.status) : "这份旧资料仍在后台处理中，不提供文件预览。"}</p></div> : null}
                     {document.status === "failed" ? <div className="document-reader__processing-error" role="alert">
-                      <p>后台处理失败：{document.failure_message ?? "请重新处理资料。"}原文件仍可预览。</p>
+                      <p>后台处理失败：{document.failure_message ?? "请重新处理资料。"}{isPdf ? "原文件仍可预览。" : "这份旧资料不提供文件预览。"}</p>
                       <button className="button button--secondary" disabled={retryMutation.isPending} onClick={() => retryMutation.mutate()} type="button">{retryMutation.isPending ? "正在提交…" : "重新处理"}</button>
                       {retryMutation.error ? <p>{retryMutation.error.message}</p> : null}
                     </div> : null}
                     {isPdf ? <p>使用底部导航或 <kbd>[</kbd> 与 <kbd>]</kbd> 切换 PDF 页面。</p> : null}
                     {document.status === "ready" && !historicalVersion ? <button aria-controls={hasOpenedQuestions ? "reader-questions" : undefined} aria-expanded={activePanel === "questions"} className="button button--secondary" onClick={() => activePanel === "questions" ? closeQuestions() : openQuestions()} type="button">{activePanel === "questions" ? "收起资料问答" : "基于此资料提问"}</button> : null}
+                    {isPdf && document.status === "ready" && !historicalVersion ? <QuickQuizAction documentId={documentId} filename={document.filename} key={documentId} /> : null}
                     <button className="button button--danger-quiet document-reader__delete" onClick={() => setIsDeleteOpen(true)} type="button">删除资料</button>
                   </header>
                   {isPdf ? <section aria-label={`第 ${currentPage} 页`} className="document-reader__preview" id={`content-${currentPage}`} tabIndex={-1}>
@@ -273,7 +275,7 @@ export function ReaderPage() {
                   </section> : <section className="preview-unavailable" role="status">
                     <Icon name="document" />
                     <h2>暂不支持预览</h2>
-                    <p>{documentTypeLabel(document.media_type)} 文件仍可用于后台处理、资料问答和练习。</p>
+                    <p>这份旧资料不是 PDF。你仍可查看已保存的问答与引用；新上传仅支持 PDF。</p>
                   </section>}
                 </article> : null}
         </main>

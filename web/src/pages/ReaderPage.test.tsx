@@ -20,6 +20,9 @@ vi.mock("../hooks/useDocuments", () => ({
 vi.mock("../components/PdfPreview", () => ({
   PdfPreview: ({ page }: { page: number }) => <div aria-label={`PDF 原文件第 ${page} 页`} />,
 }));
+vi.mock("../components/QuickQuizAction", () => ({
+  QuickQuizAction: () => <button type="button">用这份资料生成 5 题</button>,
+}));
 
 const readyDocument = {
   id: "11111111-1111-4111-8111-111111111111",
@@ -60,6 +63,7 @@ describe("ReaderPage", () => {
     renderReader();
 
     expect(await screen.findByLabelText("PDF 原文件第 1 页")).toBeVisible();
+    expect(screen.getByRole("button", { name: "用这份资料生成 5 题" })).toBeVisible();
     expect(screen.queryByRole("button", { name: "提取文字" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "放大正文字号" })).not.toBeInTheDocument();
     fireEvent.keyDown(window, { key: "]" });
@@ -67,16 +71,14 @@ describe("ReaderPage", () => {
     expect(screen.getByText("第 2 / 2 页")).toBeVisible();
   });
 
-  it.each([
-    ["Review.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "DOCX"],
-    ["Slides.pptx", "application/vnd.openxmlformats-officedocument.presentationml.presentation", "PPTX"],
-  ])("shows unsupported preview for %s", async (filename, mediaType, label) => {
-    vi.mocked(getDocument).mockResolvedValue({ ...readyDocument, filename, media_type: mediaType });
+  it("shows a compatibility message for a previously stored non-PDF file", async () => {
+    vi.mocked(getDocument).mockResolvedValue({ ...readyDocument, filename: "Archived file", media_type: "application/octet-stream" });
     renderReader();
 
     expect(await screen.findByRole("heading", { name: "暂不支持预览" })).toBeVisible();
-    expect(screen.getByText(`${label} 文件仍可用于后台处理、资料问答和练习。`)).toBeVisible();
+    expect(screen.getByText(/这份旧资料不是 PDF/)).toBeVisible();
     expect(screen.queryByLabelText("PDF 原文件第 1 页")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "用这份资料生成 5 题" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "下一页" })).not.toBeInTheDocument();
   });
 
@@ -85,6 +87,7 @@ describe("ReaderPage", () => {
     renderReader();
 
     expect(await screen.findByLabelText("PDF 原文件第 1 页")).toBeVisible();
+    expect(screen.queryByRole("button", { name: "用这份资料生成 5 题" })).not.toBeInTheDocument();
     expect(screen.getByText(/原文件可以先行预览/)).toBeVisible();
   });
 

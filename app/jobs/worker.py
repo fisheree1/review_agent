@@ -10,8 +10,6 @@ import httpx
 from app.core.config import ModelSettings, RagSettings, WorkerSettings
 from app.core.database import async_session_factory, close_database, verify_runtime_database_role
 from app.documents.application.worker import DocumentJobProcessor
-from app.documents.infrastructure.document_parser import DocumentParserRegistry
-from app.documents.infrastructure.office_parser import OoxmlDocumentParser
 from app.documents.infrastructure.pdf_parser import PypdfDocumentParser
 from app.documents.infrastructure.repository import SqlAlchemyDocumentsUnitOfWork
 from app.documents.infrastructure.storage import MinioDocumentStorage
@@ -60,18 +58,10 @@ async def run_worker() -> None:
     processor = DocumentJobProcessor(
         unit_of_work_factory=lambda: SqlAlchemyDocumentsUnitOfWork(async_session_factory),
         storage=storage,
-        parser=DocumentParserRegistry(
-            pdf_parser=PypdfDocumentParser(
-                timeout_seconds=settings.pdf_parser_timeout_seconds,
-                max_pages=settings.max_pdf_pages,
-                max_characters=settings.max_pdf_characters,
-            ),
-            office_parser=OoxmlDocumentParser(
-                timeout_seconds=settings.office_parser_timeout_seconds,
-                max_units=settings.max_office_units,
-                max_characters=settings.max_office_characters,
-                max_uncompressed_bytes=settings.max_office_uncompressed_bytes,
-            ),
+        parser=PypdfDocumentParser(
+            timeout_seconds=settings.pdf_parser_timeout_seconds,
+            max_pages=settings.max_pdf_pages,
+            max_characters=settings.max_pdf_characters,
         ),
         lease_seconds=settings.job_lease_seconds,
     )

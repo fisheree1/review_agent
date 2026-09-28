@@ -25,7 +25,7 @@
 | 数据 | 存储 | 说明 |
 | --- | --- | --- |
 | 用户、空间、文档元数据 | PostgreSQL | 权限与业务事实 |
-| 原始 PDF/DOCX/PPTX | 对象存储 | 私有 bucket，数据库保存对象键和哈希 |
+| 原始 PDF（含历史非 PDF 记录） | 对象存储 | 私有 bucket，数据库保存对象键和哈希；新上传仅接受 PDF |
 | 当前有序正文 | PostgreSQL `document_pages` | 兼容表名；保存页、标题段或幻灯片及统一 locator |
 | 文本分块与来源定位 | PostgreSQL | RAG 的可追溯最小单元 |
 | Embedding | pgvector | 派生数据，带模型与索引版本 |

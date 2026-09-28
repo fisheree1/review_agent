@@ -94,7 +94,7 @@ async def upload_document(
     principal: Annotated[Principal, Depends(get_current_principal)],
     service: Annotated[DocumentService, Depends(get_document_service)],
     limiter: Limiter,
-    file: Annotated[UploadFile, File(description="PDF, DOCX, or PPTX learning material")],
+    file: Annotated[UploadFile, File(description="PDF learning material")],
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
 ) -> UploadResponse:
     await enforce_rate_limit(
@@ -133,7 +133,7 @@ async def get_original_pdf(
     principal: Annotated[Principal, Depends(get_current_principal)],
     service: Annotated[DocumentService, Depends(get_document_service)],
 ) -> FileResponse:
-    """Return an authorized PDF source; DOCX and PPTX have no original preview."""
+    """Return an authorized PDF source for preview."""
     path = await service.pdf_source(
         workspace_public_id=principal.workspace_public_id,
         document_public_id=document_id,

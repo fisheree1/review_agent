@@ -70,3 +70,30 @@ def test_quiz_rejects_invalid_requested_shape_and_scores_exact_objective_answers
     assert score_objective("multiple", ["A", "C"], ["A", {"bad": "value"}]) == 0.0
     assert score_objective("true_false", False, False) == 1.0
     assert score_objective("true_false", False, 0) == 0.0
+
+
+def test_bilingual_quiz_publishes_only_fully_paired_questions() -> None:
+    source = evidence()
+    config = blueprint()
+    assert config["schema_version"] == "quiz-cited-v1"
+    config = validate_blueprint({**config, "language": "zh-en"})
+    assert config["schema_version"] == "quiz-cited-v2"
+    valid = {
+        **candidate(source),
+        "topic": "中文：统计量\nEnglish: Statistic",
+        "stem": "中文：哪个统计量能抵抗极端值？\nEnglish: Which statistic resists outliers?",
+        "options": [
+            "中文：中位数\nEnglish: Median",
+            "中文：均值\nEnglish: Mean",
+            "中文：众数\nEnglish: Mode",
+        ],
+        "answer": "中文：中位数\nEnglish: Median",
+        "explanation": (
+            "中文：资料指出中位数不易受极端值影响。\n"
+            "English: The source says the median resists outliers."
+        ),
+    }
+    missing_translation = {**valid, "explanation": "资料指出中位数不易受极端值影响。"}
+    accepted = validate_candidates({"questions": [missing_translation, valid]}, config, [source])
+    assert len(accepted) == 1
+    assert accepted[0]["answer"] == valid["answer"]

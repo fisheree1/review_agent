@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from typing import Any
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
@@ -242,6 +243,29 @@ def test_standard_quiz_still_accepts_payload_when_provider_omits_usage() -> None
             assert usage["prompt_tokens"] == 0
 
     asyncio.run(check())
+
+
+def test_bilingual_quiz_prompt_requires_paired_fields_without_translating_citations() -> None:
+    requests: list[dict[str, Any]] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        requests.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "choices": [{"finish_reason": "stop", "message": {"content": '{"questions":[]}'}}],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 1},
+            },
+        )
+
+    async def check() -> None:
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
+            provider = CloudModels(ModelSettings(deepseek_api_key=SecretStr("test-only")), client)
+            await provider.generate_quiz_with_usage({"language": "zh-en"}, [])
+
+    asyncio.run(check())
+    assert requests[0]["max_tokens"] == 8000
+    assert "Citation quotes remain exact source substrings" in requests[0]["messages"][0]["content"]
 
 
 def test_cancelled_question_never_calls_generation_and_invalid_answer_fails() -> None:

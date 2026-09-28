@@ -185,7 +185,7 @@ docker compose ps
 
 `0002_document_ingestion` 创建资料闭环所需的五张表。`0003`–`0007` 逐步增加游标索引、租户完整性、Worker 心跳与统一 citation locator；`0008_cited_rag` 增加索引、分块和独立问答任务；`0009_learning_core` 增加集合、连续对话、反馈、Quiz 与作答表；`0010_user_auth` 增加账号、成员、密码哈希、会话及登录限流；`0011_version_purge_trigger` 将学习记录清理限定于解析版本实际删除。每次改模型后运行 `docker compose run --rm database-init alembic check`，并从空库与上一 revision 验证升级。
 
-当前 Worker 直接领取 PostgreSQL 中的持久任务，使用短事务、租约、尝试上限和幂等键。PDF 与 OOXML 解析在禁止网络的子进程执行，API 只做流式上传与结构校验，不解析正文。将 Redis 用作任务队列或引入 Celery 前先依据 [ADR-0001](./adr/0001-postgresql-document-jobs.md) 的迁移门槛评审，不能形成第二份任务状态。
+当前 Worker 直接领取 PostgreSQL 中的持久任务，使用短事务、租约、尝试上限和幂等键。PDF 解析在禁止网络的子进程执行，API 只做流式上传与结构校验，不解析正文。将 Redis 用作任务队列或引入 Celery 前先依据 [ADR-0001](./adr/0001-postgresql-document-jobs.md) 的迁移门槛评审，不能形成第二份任务状态。
 
 Redis 当前只做 API 限流：登录按邮箱摘要，上传、索引、问答、Quiz 和反馈按工作区计数。限流脚本原子设置过期时间，并允许同一工作区和动作的幂等键重放。超额返回 `RATE_LIMITED`（429）；Redis 不可用返回 `RATE_LIMIT_UNAVAILABLE`（503），不继续执行高成本操作。开发模式直接运行 API 时默认关闭 Redis 限流；Compose 中开启。生产模式必须启用并配置 Redis 密码。
 
@@ -193,7 +193,7 @@ Redis 当前只做 API 限流：登录按邮箱摘要，上传、索引、问答
 
 当前健康检查：`/health/live` 验证 API 进程存活，`/health/ready` 验证数据库和 pgvector 可用，`/health/worker` 验证文档 Worker 最近心跳。API 就绪与 Worker 就绪分开，避免后台处理故障把只读 API 误判为不可用；外部模型故障通过降级和指标展示，不应让整个 API 不健康。
 
-React 前端位于 `web/`。服务端状态由 TanStack Query 管理，当前资料与 PDF 页码进入 URL。PDF 使用授权原文件接口和按需加载的 PDF.js 预览；DOCX/PPTX 显示不支持预览，前端不请求或展示整页提取正文。引用只显示回答中已保存的摘录；后台解析正文仍供检索、问答和 Quiz 使用。开发与预览代理只转发同源 `/api` 请求，浏览器通过 HttpOnly 会话 Cookie 认证，写请求携带从登录响应取得的 CSRF 标记。组件测试使用 Vitest/Testing Library，真实上传预览旅程使用 Playwright。CI 同时执行前端类型检查、组件测试和生产构建，不能只验证后端。
+React 前端位于 `web/`。服务端状态由 TanStack Query 管理，当前资料与 PDF 页码进入 URL。PDF 使用授权原文件接口和按需加载的 PDF.js 预览；历史非 PDF 资料只显示兼容提示，前端不请求或展示整页提取正文。引用只显示回答中已保存的摘录；后台解析正文仍供检索、问答和 Quiz 使用。筛选和出题设置统一使用项目的 `SelectField` 自定义下拉组件，保留键盘与焦点交互。开发与预览代理只转发同源 `/api` 请求，浏览器通过 HttpOnly 会话 Cookie 认证，写请求携带从登录响应取得的 CSRF 标记。组件测试使用 Vitest/Testing Library，真实上传预览旅程使用 Playwright。CI 同时执行前端类型检查、组件测试和生产构建，不能只验证后端。
 
 ## 学习图开发与验证
 

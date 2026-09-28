@@ -15,6 +15,7 @@ function AnswerEditor({ question, value, onChange, disabled, idPrefix }: {
   onChange: (value: ResponseValue) => void; disabled: boolean;
   idPrefix: string;
 }) {
+  const bilingual = question.stem.startsWith("中文：");
   if (question.kind === "single") return <fieldset><legend>选择一项</legend>
     {question.options.map((option) => <label className="quiz-option" key={option}>
       <input checked={value === option} disabled={disabled} name={`${idPrefix}-${question.id}`} onChange={() => onChange(option)} type="radio" />{option}
@@ -29,17 +30,17 @@ function AnswerEditor({ question, value, onChange, disabled, idPrefix }: {
     </label>)}
   </fieldset>;
   if (question.kind === "true_false") return <fieldset><legend>判断正误</legend>
-    <label className="quiz-option"><input checked={value === true} disabled={disabled} name={`${idPrefix}-${question.id}`} onChange={() => onChange(true)} type="radio" />正确</label>
-    <label className="quiz-option"><input checked={value === false} disabled={disabled} name={`${idPrefix}-${question.id}`} onChange={() => onChange(false)} type="radio" />错误</label>
+    <label className="quiz-option"><input checked={value === true} disabled={disabled} name={`${idPrefix}-${question.id}`} onChange={() => onChange(true)} type="radio" />{bilingual ? "正确 / True" : "正确"}</label>
+    <label className="quiz-option"><input checked={value === false} disabled={disabled} name={`${idPrefix}-${question.id}`} onChange={() => onChange(false)} type="radio" />{bilingual ? "错误 / False" : "错误"}</label>
   </fieldset>;
   return <><label htmlFor={`answer-${idPrefix}-${question.id}`}>你的简答</label>
     <textarea disabled={disabled} id={`answer-${idPrefix}-${question.id}`} maxLength={2000} onChange={(event) => onChange(event.target.value)} rows={5} value={typeof value === "string" ? value : ""} />
     <p>简答评分由模型提供学习提示，不是人工评分。</p></>;
 }
 
-function answerText(value: string | string[] | boolean | null): string {
-  if (Array.isArray(value)) return value.join("、");
-  if (typeof value === "boolean") return value ? "正确" : "错误";
+function answerText(value: string | string[] | boolean | null, bilingual: boolean): string {
+  if (Array.isArray(value)) return value.join(bilingual ? "\n\n" : "、");
+  if (typeof value === "boolean") return bilingual ? value ? "正确 / True" : "错误 / False" : value ? "正确" : "错误";
   return value ?? "未作答";
 }
 
@@ -150,8 +151,8 @@ export function QuizAttemptPanel({ quizId, attemptId, weakOnlyInitially = false,
         <h2>{question.stem}</h2>
         <AnswerEditor idPrefix={panelId} disabled={attempt.data?.status !== "in_progress" || submit.isPending} onChange={(value) => { setResponses((current) => ({ ...current, [question.id]: value })); draft.edit(question.id, value); }} question={question} value={responses[question.id]} />
         {complete ? <div className="quiz-review">
-          <p>你的答案：{answerText(question.response)}</p>
-          <p>参考答案：{answerText(question.answer)}</p>
+          <p>你的答案：{answerText(question.response, question.stem.startsWith("中文："))}</p>
+          <p>参考答案：{answerText(question.answer, question.stem.startsWith("中文："))}</p>
           <p>得分：{Math.round((question.earned ?? 0) * 100)}%</p>
           {question.grading_method === "model_hint" ? <p>简答题为模型评分提示，请核对原文。</p> : null}
           <p>{question.feedback}</p><p>{question.explanation}</p>

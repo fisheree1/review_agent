@@ -2,7 +2,7 @@
 
 ## Mission and source of truth
 
-Build a private, traceable learning system for PDF, DOCX, and PPTX materials. The core journey is document ingestion, cited RAG answers, focused Quiz generation, feedback, and review.
+Build a private, traceable learning system for PDF materials. The core journey is document ingestion, cited RAG answers, focused Quiz generation, feedback, and review.
 
 Before changing behavior, read only the relevant project documents:
 
@@ -21,7 +21,7 @@ When code and documentation disagree, do not silently choose one. Preserve worki
 - Keep domain and application logic independent of FastAPI, SQLAlchemy, Celery, storage SDKs, and model-provider SDKs.
 - Put protocol mapping in API routes, use-case orchestration in application code, business rules in domain code, and vendor/database details in infrastructure adapters.
 - PostgreSQL is the source of truth. Redis, vector indexes, caches, and parsed artifacts are replaceable or rebuildable projections.
-- Do not run parsing, OCR, Office conversion, large embedding batches, or long model calls inside API request workers.
+- Do not run parsing, OCR, large embedding batches, or long model calls inside API request workers.
 - Do not hold a database transaction open during network or model calls.
 - Treat background delivery as at least once. Jobs and externally billed operations require an idempotency key and bounded retries.
 - New document indexes are versioned and become visible through an atomic activation step. Never expose a partially built index.
