@@ -216,7 +216,10 @@ services:
     restart: unless-stopped
 
   minio:
-    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
+    build:
+      context: .
+      dockerfile: Dockerfile.storage
+    image: review-agent-storage:RELEASE.2025-10-15T17-29-55Z
     command: ["server", "/data", "--console-address", ":9001"]
     environment:
       MINIO_ROOT_USER: ${STORAGE_ADMIN_ACCESS_KEY:?Run python3 scripts/init_local_env.py or scripts/upgrade_local_env.py first}
