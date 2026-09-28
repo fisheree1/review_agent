@@ -53,6 +53,14 @@ class DocumentListPosition:
 
 
 @dataclass(frozen=True, slots=True)
+class DocumentListFilters:
+    search: str = ""
+    statuses: tuple[DocumentStatus, ...] = ()
+    oldest_first: bool = False
+    collection_public_id: UUID | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class DocumentListPage:
     items: tuple[Document, ...]
     next_position: DocumentListPosition | None
@@ -102,3 +110,10 @@ class ClaimedJob:
 class DeleteTarget:
     document: Document
     object_key: str
+
+
+@dataclass(frozen=True, slots=True)
+class DocumentSource:
+    object_key: str
+    media_type: str
+    status: DocumentStatus

@@ -1,0 +1,11 @@
+# Add after production and BaoTa overlays only for the single-admin portal.
+services:
+  api:
+    environment:
+      AUTH_GATEWAY_ENABLED: "true"
+      AUTH_GATEWAY_USER_ID: ${AUTH_GATEWAY_USER_ID:?Set the project account public ID}
+    secrets:
+      - auth_gateway_token
+secrets:
+  auth_gateway_token:
+    file: ${PROD_SECRETS_DIR:?Set PROD_SECRETS_DIR}/auth_gateway_token

@@ -188,6 +188,62 @@ def test_dashscope_batch_vectors_follow_input_order() -> None:
     asyncio.run(check())
 
 
+def test_planner_uses_bounded_json_decisions_without_exposing_other_tools() -> None:
+    requests: list[dict] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        requests.append(payload)
+        return httpx.Response(
+            200,
+            json={
+                "model": "fake-model",
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "message": {"content": '{"tool":"search","query":"median"}'},
+                    }
+                ],
+                "usage": {"prompt_tokens": 40, "completion_tokens": 9},
+            },
+        )
+
+    async def check() -> None:
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
+            provider = CloudModels(ModelSettings(deepseek_api_key=SecretStr("test-only")), client)
+            decision, usage = await provider.plan_step(
+                "What does the material say?", history=[], observations=[]
+            )
+            assert decision == {"tool": "search", "query": "median"}
+            assert usage["prompt_tokens"] == 40
+            assert usage["completion_tokens"] == 9
+
+    asyncio.run(check())
+    assert requests[0]["max_tokens"] == 256
+    assert requests[0]["response_format"] == {"type": "json_object"}
+    assert "delete" not in requests[0]["messages"][0]["content"]
+
+
+def test_standard_quiz_still_accepts_payload_when_provider_omits_usage() -> None:
+    def handle(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "choices": [{"finish_reason": "stop", "message": {"content": '{"questions":[]}'}}],
+                "usage": None,
+            },
+        )
+
+    async def check() -> None:
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
+            provider = CloudModels(ModelSettings(deepseek_api_key=SecretStr("test-only")), client)
+            assert await provider.generate_quiz({}, []) == {"questions": []}
+            _, usage = await provider.generate_quiz_with_usage({}, [])
+            assert usage["prompt_tokens"] == 0
+
+    asyncio.run(check())
+
+
 def test_cancelled_question_never_calls_generation_and_invalid_answer_fails() -> None:
     async def check() -> None:
         store = AsyncMock(spec=RagStore)

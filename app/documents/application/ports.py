@@ -12,8 +12,10 @@ from app.documents.domain.entities import (
     Document,
     DocumentContent,
     DocumentContentLocation,
+    DocumentListFilters,
     DocumentListPage,
     DocumentListPosition,
+    DocumentSource,
     ParsedDocument,
 )
 
@@ -81,12 +83,17 @@ class DocumentRepository(Protocol):
         self, *, workspace_public_id: UUID, document_public_id: UUID
     ) -> Document | None: ...
 
+    async def get_document_source(
+        self, *, workspace_public_id: UUID, document_public_id: UUID
+    ) -> DocumentSource | None: ...
+
     async def list_documents(
         self,
         *,
         workspace_public_id: UUID,
         limit: int,
         after: DocumentListPosition | None,
+        filters: DocumentListFilters = DocumentListFilters(),
     ) -> DocumentListPage: ...
 
     async def list_content(

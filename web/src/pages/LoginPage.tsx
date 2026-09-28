@@ -1,9 +1,11 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Navigate, useLocation, useNavigate } from "react-router-dom";
 
 import { getAuthConfig, login, register, type AuthIdentity } from "../api/auth";
 import { ApiError } from "../api/documents";
+import { Icon } from "../components/Icon";
+import { ThemeToggle } from "../components/ThemeToggle";
 
 export function LoginPage({ identity }: { identity: AuthIdentity | null }) {
   const [email, setEmail] = useState("");
@@ -11,6 +13,8 @@ export function LoginPage({ identity }: { identity: AuthIdentity | null }) {
   const [signup, setSignup] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const errorSummary = useRef<HTMLParagraphElement>(null);
+  useEffect(() => { if (error) errorSummary.current?.focus(); }, [error]);
   const config = useQuery({ queryKey: ["auth-config"], queryFn: getAuthConfig });
   const queryClient = useQueryClient();
   const navigate = useNavigate();
@@ -33,20 +37,20 @@ export function LoginPage({ identity }: { identity: AuthIdentity | null }) {
     }
   }
 
-  return <main className="auth-screen" id="main-content">
+  return <main className="auth-screen" id="main-content" tabIndex={-1}>
     <section className="auth-card" aria-labelledby="auth-title">
-      <span className="eyebrow">Review Agent</span>
+      <div className="auth-brand"><span className="brand" translate="no"><span className="brand__mark"><Icon name="book" /></span><span>Review Agent</span></span><ThemeToggle /></div>
       <h1 id="auth-title">{signup ? "创建学习账号" : "登录学习空间"}</h1>
       <p>你的资料、问答和练习保存在专属空间。</p>
-      <form onSubmit={(event) => void submit(event)}>
+      {config.data?.login_mode === "portal" ? <a className="button button--primary" href="/login">使用门户账号登录</a> : <form onSubmit={(event) => void submit(event)}>
         <label htmlFor="auth-email">邮箱</label>
-        <input id="auth-email" type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} required />
+        <input id="auth-email" name="email" type="email" inputMode="email" spellCheck={false} aria-describedby={error ? "auth-error" : undefined} autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} required />
         <label htmlFor="auth-password">密码</label>
-        <input id="auth-password" type="password" autoComplete={signup ? "new-password" : "current-password"} minLength={signup ? 12 : 1} value={password} onChange={(event) => setPassword(event.target.value)} required />
-        {signup ? <p className="auth-hint">至少 12 个字符。</p> : null}
-        {error ? <p className="field-error" role="alert">{error}</p> : null}
+        <input id="auth-password" name="password" aria-describedby={error ? "auth-error" : signup ? "auth-password-help" : undefined} type="password" autoComplete={signup ? "new-password" : "current-password"} minLength={signup ? 12 : 1} value={password} onChange={(event) => setPassword(event.target.value)} required />
+        {signup ? <p className="auth-hint" id="auth-password-help">至少 12 个字符。</p> : null}
+        {error ? <p className="field-error" id="auth-error" ref={errorSummary} tabIndex={-1} role="alert">{error}</p> : null}
         <button className="button button--primary" disabled={busy} type="submit">{busy ? "请稍候…" : signup ? "创建账号" : "登录"}</button>
-      </form>
+      </form>}
       {config.data?.signup_enabled ? <button className="auth-switch" type="button" onClick={() => { setSignup(!signup); setError(""); }}>{signup ? "已有账号？返回登录" : "没有账号？创建账号"}</button> : null}
     </section>
   </main>;

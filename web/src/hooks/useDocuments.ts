@@ -1,11 +1,11 @@
 import { useInfiniteQuery } from "@tanstack/react-query";
 
-import { isProcessing, listDocuments } from "../api/documents";
+import { isProcessing, listDocuments, type DocumentFilters } from "../api/documents";
 
-export function useDocuments() {
+export function useDocuments(filters?: DocumentFilters) {
   const query = useInfiniteQuery({
-    queryKey: ["documents"],
-    queryFn: ({ pageParam }) => listDocuments(pageParam || undefined),
+    queryKey: filters ? ["documents", filters] : ["documents"],
+    queryFn: ({ pageParam }) => listDocuments(pageParam || undefined, filters),
     initialPageParam: "",
     getNextPageParam: (lastPage) => lastPage.next_cursor ?? undefined,
     refetchInterval: (currentQuery) => {

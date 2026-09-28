@@ -24,18 +24,33 @@ class Principal:
     csrf_token: str | None = None
 
 
+def verify_auth_gateway(request: Request, settings: Settings) -> None:
+    if settings.auth_gateway_enabled and not secrets.compare_digest(
+        request.headers.get("X-Review-Gateway", "").encode("utf-8"),
+        settings.auth_gateway_token.get_secret_value().encode("utf-8"),
+    ):
+        raise ApplicationError(
+            code="AUTHENTICATION_REQUIRED", message="请通过门户登录", status_code=401
+        )
+
+
 async def get_current_principal(
     request: Request,
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer_scheme)],
     settings: Annotated[Settings, Depends(get_settings)],
     service: Annotated[AuthService, Depends(get_auth_service)],
 ) -> Principal:
+    verify_auth_gateway(request, settings)
     token = request.cookies.get(settings.auth_cookie_name)
     if token:
         identity = await service.current(token)
         if identity is None:
             raise ApplicationError(
                 code="AUTHENTICATION_REQUIRED", message="请重新登录", status_code=401
+            )
+        if settings.auth_gateway_enabled and identity.user_id != settings.auth_gateway_user_id:
+            raise ApplicationError(
+                code="AUTHENTICATION_REQUIRED", message="账号与门户授权不匹配", status_code=401
             )
         if request.method not in {"GET", "HEAD", "OPTIONS"}:
             supplied = request.headers.get("X-CSRF-Token", "")

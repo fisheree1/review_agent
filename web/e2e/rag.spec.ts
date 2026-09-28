@@ -1,4 +1,9 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
 import { expect, test } from "@playwright/test";
+
+const original = readFileSync(fileURLToPath(new URL("./preview-fixture.pdf", import.meta.url)));
 
 test("ask within a document, inspect a citation with the keyboard, and open its source", async ({ page }) => {
   await page.route("**/api/v1/auth/me", (route) => route.fulfill({ json: {
@@ -14,6 +19,10 @@ test("ask within a document, inspect a citation with the keyboard, and open its 
   const answer = { id: "question", question: "Why use the median?", version: 1, status: "answered", failure_message: null, answer: { insufficient_evidence: false, claims: [{ text: "The median is robust against extreme outliers. ".repeat(35), citations: [{ source_id: "source", quote: "The median is robust against extreme outliers.", unit: 2, locator: locator(2) }] }] } };
   await page.route("**/api/v1/documents**", async (route) => {
     const url = new URL(route.request().url());
+    if (url.pathname.endsWith("/original")) {
+      await route.fulfill({ body: original, contentType: "application/pdf" });
+      return;
+    }
     let response: unknown;
     if (url.pathname.endsWith("/index")) response = { status: "ready", completed: 2, total: 2, failure_message: null };
     else if (url.pathname.endsWith("/questions")) {
@@ -27,7 +36,7 @@ test("ask within a document, inspect a citation with the keyboard, and open its 
     await route.fulfill({ json: response });
   });
   await page.goto(`/documents/${id}`);
-  await expect(page.locator("#content-1")).toBeVisible();
+  await expect(page.getByRole("img", { name: "PDF 原文件第 1 页" })).toBeVisible();
   await page.evaluate(() => window.scrollTo(0, 480));
   const readingPosition = await page.evaluate(() => window.scrollY);
   expect(readingPosition).toBeGreaterThan(200);
@@ -53,13 +62,12 @@ test("ask within a document, inspect a citation with the keyboard, and open its 
   await expect(page).not.toHaveURL(/unit=2/);
   await page.getByRole("button", { name: "在原文中打开" }).click();
   await expect(page).toHaveURL(/unit=2/);
-  await expect(page.locator("#content-2 mark")).toHaveText("The median is robust against extreme outliers.");
+  await expect(page.getByRole("img", { name: "PDF 原文件第 2 页" })).toBeVisible();
   await page.getByRole("button", { name: "打开资料问答" }).click();
   await page.getByRole("button", { name: "收起资料问答" }).first().click();
   await expect(page).toHaveURL(/unit=1/);
   await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(readingPosition);
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.getByRole("button", { name: "关闭引用面板" }).click();
   await page.getByRole("button", { name: "打开资料问答" }).click();
   await expect(page.getByRole("dialog", { name: "资料问答" })).toBeVisible();
   await citation.click();

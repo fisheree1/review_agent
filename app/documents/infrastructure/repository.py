@@ -18,8 +18,10 @@ from app.documents.domain.entities import (
     Document,
     DocumentContent,
     DocumentContentLocation,
+    DocumentListFilters,
     DocumentListPage,
     DocumentListPosition,
+    DocumentSource,
     DocumentStatus,
     JobStatus,
     ParsedDocument,
@@ -31,6 +33,7 @@ from app.documents.infrastructure.models import (
     ProcessingJobModel,
     WorkspaceModel,
 )
+from app.learning.models import Collection, CollectionDocument
 
 
 def _document_view(model: DocumentModel, workspace_public_id: UUID) -> Document:
@@ -228,12 +231,32 @@ class SqlAlchemyDocumentRepository(DocumentRepository):
         ).one_or_none()
         return None if row is None else _document_view(row[0], row[1])
 
+    async def get_document_source(
+        self, *, workspace_public_id: UUID, document_public_id: UUID
+    ) -> DocumentSource | None:
+        row = (
+            await self._session.execute(
+                select(DocumentModel.object_key, DocumentModel.media_type, DocumentModel.status)
+                .join(WorkspaceModel, WorkspaceModel.id == DocumentModel.workspace_id)
+                .where(
+                    WorkspaceModel.public_id == workspace_public_id,
+                    DocumentModel.public_id == document_public_id,
+                    DocumentModel.deleted_at.is_(None),
+                    DocumentModel.status != DocumentStatus.DELETED.value,
+                )
+            )
+        ).one_or_none()
+        if row is None:
+            return None
+        return DocumentSource(object_key=row[0], media_type=row[1], status=DocumentStatus(row[2]))
+
     async def list_documents(
         self,
         *,
         workspace_public_id: UUID,
         limit: int,
         after: DocumentListPosition | None,
+        filters: DocumentListFilters = DocumentListFilters(),
     ) -> DocumentListPage:
         statement = (
             select(DocumentModel, WorkspaceModel.public_id)
@@ -243,23 +266,46 @@ class SqlAlchemyDocumentRepository(DocumentRepository):
                 DocumentModel.status != DocumentStatus.DELETED.value,
             )
         )
-        if after is not None:
+        if filters.search:
             statement = statement.where(
-                or_(
-                    DocumentModel.created_at < after.created_at,
-                    and_(
-                        DocumentModel.created_at == after.created_at,
-                        DocumentModel.id < after.internal_id,
-                    ),
-                )
+                DocumentModel.original_filename.icontains(filters.search, autoescape=True)
             )
-        rows = (
-            await self._session.execute(
-                statement.order_by(DocumentModel.created_at.desc(), DocumentModel.id.desc()).limit(
-                    limit + 1
-                )
+        if filters.statuses:
+            statement = statement.where(
+                DocumentModel.status.in_([status.value for status in filters.statuses])
             )
-        ).all()
+        if filters.collection_public_id is not None:
+            statement = statement.where(
+                select(CollectionDocument.id)
+                .join(Collection, Collection.id == CollectionDocument.collection_id)
+                .where(
+                    Collection.public_id == filters.collection_public_id,
+                    Collection.workspace_id == DocumentModel.workspace_id,
+                    CollectionDocument.workspace_id == DocumentModel.workspace_id,
+                    CollectionDocument.document_id == DocumentModel.id,
+                )
+                .exists()
+            )
+        if after is not None:
+            time_boundary = (
+                DocumentModel.created_at > after.created_at
+                if filters.oldest_first
+                else DocumentModel.created_at < after.created_at
+            )
+            id_boundary = (
+                DocumentModel.id > after.internal_id
+                if filters.oldest_first
+                else DocumentModel.id < after.internal_id
+            )
+            statement = statement.where(
+                or_(time_boundary, and_(DocumentModel.created_at == after.created_at, id_boundary))
+            )
+        ordering = (
+            (DocumentModel.created_at.asc(), DocumentModel.id.asc())
+            if filters.oldest_first
+            else (DocumentModel.created_at.desc(), DocumentModel.id.desc())
+        )
+        rows = (await self._session.execute(statement.order_by(*ordering).limit(limit + 1))).all()
         visible_rows = rows[:limit]
         next_position = None
         if len(rows) > limit and visible_rows:

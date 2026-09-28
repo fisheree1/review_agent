@@ -14,19 +14,22 @@ function toggle(items: string[], id: string): string[] {
 }
 
 export function ScopePicker({ documents, collections, value, onChange, label }: Props) {
+  const readyDocuments = documents.filter((document) => document.status === "ready");
   return (
     <fieldset className="scope-picker">
       <legend>{label}</legend>
-      <p>最多选择 5 份已准备索引的资料。集合内资料也计入上限。</p>
-      {documents.filter((document) => document.status === "ready").length === 0 ? (
-        <p>还没有可用资料。请先上传并完成资料问答索引。</p>
+      <p>最多 5 份资料</p>
+      {readyDocuments.length === 0 ? (
+        <p>暂无可用资料</p>
       ) : (
         <div className="scope-picker__items">
-          {documents.filter((document) => document.status === "ready").map((document) => (
+          {readyDocuments.map((document) => (
             <label key={document.id}>
               <input
                 checked={value.document_ids.includes(document.id)}
                 onChange={() => onChange({ ...value, document_ids: toggle(value.document_ids, document.id) })}
+                name="document_ids"
+                value={document.id}
                 type="checkbox"
               />
               <span>{document.filename}</span>
@@ -42,6 +45,8 @@ export function ScopePicker({ documents, collections, value, onChange, label }: 
               <input
                 checked={value.collection_ids.includes(collection.id)}
                 onChange={() => onChange({ ...value, collection_ids: toggle(value.collection_ids, collection.id) })}
+                name="collection_ids"
+                value={collection.id}
                 type="checkbox"
               />
               <span>{collection.name}（{collection.document_ids.length} 份）</span>

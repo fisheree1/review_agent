@@ -95,6 +95,10 @@ Pydantic schema 对长度、枚举、数量和嵌套深度设置上限。OpenAPI
 
 ## 7. RAG 与模型开发规范
 
+跨资料隔离、外部调用恢复、引用语义质量、作答并发和部署兼容性的失败场景集中见[技术难点与验证路径](./technical-challenges.md)；选测试时按对应的用户后果裁剪。
+
+LangGraph 迁移按 [接入规划](./langgraph-integration-plan.md) 和 [工作流开发设计](./agent-workflow-development.md) 分阶段开发。组合学习、跨交互等待、业务检查点和草稿修订保护已实现；启用前验证恢复不会重复发布或重置预算。
+
 当前实现、独立数据库集成检查和云端连接检查见 [RAG 实现与验收](./rag-implementation.md)。普通测试使用假模型；`scripts.verify_model_access` 会调用真实服务，单独执行。供应商错误只记录稳定错误码；配置校验隐藏原始输入，避免异常消息泄露密钥。
 
 - Prompt 使用独立模板和版本号，不在 Python 字符串中到处拼接。
@@ -118,6 +122,10 @@ Pydantic schema 对长度、枚举、数量和嵌套深度设置上限。OpenAPI
 测试命名描述行为，例如 `test_deleted_document_is_excluded_from_retrieval`。Bug 修复先添加可复现测试。时间、随机数、模型与存储通过依赖注入保持可重复。
 
 ## 9. 代码质量门禁
+
+Agent 改动同时验证 `uv run python -m scripts.evaluate_agent` 的版本化合成数据集；真实服务对比需显式 `--live`，不进入普通测试。当前统一对话任务需要先升级 `0014_agent_workflows`（包含 `0013` 对话结果和 `0012` Quiz 审计），空库与上一版本升级验证方法见 [Agent 开发计划](./agent-development-plan.md)。
+
+资料库增强使用 `uv run python -m scripts.verify_frontend_learning` 在独立、空测试数据库验证：服务端全量搜索、字面通配符、两种游标顺序、集合过滤、批量创建回滚、继续学习及工作区隔离。先配置独立 PostgreSQL/pgvector，使用迁移凭据升级到 head，再用非 schema 所有者的 runtime 凭据运行脚本；脚本拒绝含已有工作区的数据库并清理自身合成数据。此增强没有 schema 变更。浏览器验收在 `web/e2e/frontend-experience.spec.ts`，覆盖历史阅读位置、新回复提示、引用预览、题号导航、URL 筛选及 320/390px 布局；组件测试检查失败重试保留选择和精确来源版本。
 
 建议逐步引入：
 
@@ -171,7 +179,7 @@ docker compose ps
 
 已有早期 `.env` 时先运行 `python3 scripts/upgrade_local_env.py`。升级脚本保留现有数据库所有者凭据，并添加独立的迁移与运行账号随机密码。
 
-本地 API 与数据库端口只绑定回环地址。`compose.override.yaml` 发布数据库端口供本地工具使用。单台云服务器生产运行使用独立的 `compose.production.yaml`，按 [上线与数据恢复手册](./production-operations.md) 通过 Caddy 发布 80/443，并在部署前检查秘密文件、异机备份、域名和端口暴露；不能叠加本地 `compose.override.yaml`。API 镜像使用固定的非 root UID/GID，并在 Compose 中启用只读根文件系统、移除 Linux capabilities 和 `no-new-privileges`。
+本地 API 与数据库端口只绑定回环地址。`compose.override.yaml` 发布数据库端口供本地工具使用。单台云服务器生产运行使用独立的 `compose.production.yaml`：独立站点可按 [上线与数据恢复手册](./production-operations.md)由 Caddy 发布 80/443；当前 fisher-ai.com 使用宝塔 Nginx 与门户 overlay，实际参数见[部署记录](./deployment-fisher-ai.md)。部署前检查秘密文件、备份状态、域名和端口暴露；不能叠加本地 `compose.override.yaml`。API 镜像使用固定的非 root UID/GID，并在 Compose 中启用只读根文件系统、移除 Linux capabilities 和 `no-new-privileges`。
 
 `database-init` 是可重复执行的一次性容器，先以管理员账号幂等配置角色与 schema，再以迁移账号运行 Alembic。API 只接收运行账号凭据。手动执行迁移使用 `docker compose run --rm database-init`，不要从 API 启动流程调用 `create_all()`。当前 `0001_database_baseline` 只建立 Alembic 版本基线，不创建尚未定稿的业务表。
 
@@ -185,4 +193,8 @@ Redis 当前只做 API 限流：登录按邮箱摘要，上传、索引、问答
 
 当前健康检查：`/health/live` 验证 API 进程存活，`/health/ready` 验证数据库和 pgvector 可用，`/health/worker` 验证文档 Worker 最近心跳。API 就绪与 Worker 就绪分开，避免后台处理故障把只读 API 误判为不可用；外部模型故障通过降级和指标展示，不应让整个 API 不健康。
 
-React 前端位于 `web/`。服务端状态由 TanStack Query 管理，当前资料与内容单元序号进入 URL，正文按当前单元读取，界面根据 citation locator 显示页码、标题路径或幻灯片；主题、字号和行宽只保存在本地。开发与预览代理只转发同源 `/api` 请求，浏览器通过 HttpOnly 会话 Cookie 认证，写请求携带从登录响应取得的 CSRF 标记。组件测试使用 Vitest/Testing Library，真实上传阅读旅程使用 Playwright。CI 同时执行前端类型检查、组件测试和生产构建，不能只验证后端。
+React 前端位于 `web/`。服务端状态由 TanStack Query 管理，当前资料与 PDF 页码进入 URL。PDF 使用授权原文件接口和按需加载的 PDF.js 预览；DOCX/PPTX 显示不支持预览，前端不请求或展示整页提取正文。引用只显示回答中已保存的摘录；后台解析正文仍供检索、问答和 Quiz 使用。开发与预览代理只转发同源 `/api` 请求，浏览器通过 HttpOnly 会话 Cookie 认证，写请求携带从登录响应取得的 CSRF 标记。组件测试使用 Vitest/Testing Library，真实上传预览旅程使用 Playwright。CI 同时执行前端类型检查、组件测试和生产构建，不能只验证后端。
+
+## 学习图开发与验证
+
+应用逻辑只依赖 `StudyExecutor`、`AgentRunPersistence`；LangGraph 与 SQLAlchemy 代码放在适配器，不向领域层导入。修改图/Prompt/计划需提升相应版本，未知版本运行进入阻塞。调用预算跨恢复累计，严禁自动重发未知请求；阶段成果与恢复位置同事务。运行角色不执行 saver setup，不开启包含原文的外部追踪。修改后的重点门禁为图单元、工作区隔离、PostgreSQL 恢复/删除、0013→0014 迁移及完整移动端流程，详见 [工作流设计](./agent-workflow-development.md#12-本次交付与设计调整)。

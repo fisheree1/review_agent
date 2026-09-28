@@ -129,3 +129,36 @@ docker compose --env-file /etc/review-agent/production.env \
 发布前备份、记录当前镜像 tag 和 Git 提交，执行迁移兼容性检查，再更新 API/Worker/网页镜像。迁移失败时先保留数据和卷，优先前滚修复；不要执行未经演练的破坏性 downgrade。`docker compose down -v` 会删除数据库及文件卷，生产环境严禁使用。日志仅记录稳定 ID、结果和错误类别；不要收集文档正文、邮件、Prompt、回答、Cookie 或供应商完整请求。
 
 技术依据：[Caddy 自动 HTTPS](https://caddyserver.com/docs/automatic-https)、[Docker Compose secrets](https://docs.docker.com/compose/how-tos/use-secrets/)、[PostgreSQL pg_dump](https://www.postgresql.org/docs/17/app-pgdump.html)、[restic 备份验证](https://restic.readthedocs.io/en/stable/045_working_with_repos.html)。
+
+## Agent 工作流部署与回滚
+
+开发环境默认 `AGENT_GRAPH_ENABLED=true`；生产 Compose 默认 `false`。首次部署前备份并验证恢复，使用迁移角色升级至 `0014_agent_workflows`。排空/停止旧 Worker，部署同版本 API 与 Worker 后验证就绪和隔离学习流程；不要让旧 Worker 消费新组合评分。全运行默认 7 天到期，可通过 `AGENT_WAIT_DAYS`（1–30）调整；模型追踪关闭。
+
+质量验收后显式设置 `AGENT_GRAPH_ENABLED=true` 并更新 API。开关关闭只影响新消息，兼容 Worker 必须继续运行直至已有记录完成/取消/到期。未知模型请求进入 blocked，运营检查稳定运行 ID 与错误码，不自动补发；保留用户已完成成果。生产回滚不删除 `0014` 的表/列，也不降级仍有待办运行的 Worker。正式公开前完成真实资料集、P95、货币成本和告警演练；合成样本通过不能替代这些门槛。
+
+## 宝塔 Nginx 与现有网站共存
+
+fisher-ai.com 已用于门户、LightReader 和招聘系统时，Review Agent 使用 `/review/` 独立路径，保留现有站点和证书。使用 `compose.production.yaml` 加 `compose.baota.yaml`，只把静态页/API 入口发布到 `127.0.0.1:18081`，宝塔 Nginx 负责 HTTPS。禁止直接用原配置占用 80/443。`deploy/nginx-review.conf.example` 放进现有 HTTPS server；转发时去掉 `/review/` 一次。前端由 `WEB_BASE_PATH=/review/` 构建，路由和全部请求（包括认证及上传）都带该前缀。授权 origin 仍为 `https://fisher-ai.com`。
+
+```bash
+docker compose --env-file /etc/review-agent/production.env \
+  -f compose.production.yaml -f compose.baota.yaml up --build -d --wait
+```
+
+发布前保存原 Nginx 配置，检查语法后平滑重载；回退仅移除本次路径配置并恢复原文件，不删除任何数据库或对象卷。当前工作树尚未提交时，部署使用明确文件清单的源码归档与 SHA-256 记录，排除 `.env`、用户资料、依赖目录、缓存和 Git 元数据；不能把此归档冒充 Git 提交。后续源码提交后应记录对应提交与镜像标签。
+
+本次部署按用户明确要求不配置异机备份，原第 3–4 节的备份/恢复验收不计为完成；此例外不改变认证、隔离、数据库角色与秘密文件要求。
+
+### 复用现有门户管理员
+
+宝塔 overlay 默认仍使用项目密码登录。复用单管理员门户时，再叠加 `compose.portal.yaml`，设置预先创建的项目账号公开 ID `AUTH_GATEWAY_USER_ID`，挂载独立随机 `auth_gateway_token`（至少 32 字符，root:`10001`、`0640`）。使用 `deploy/nginx-review-portal.conf.template` 在服务器替换令牌，保存为 root-only include；不要将替换后的文件放回 Git。Nginx 先经现有 `/_portal_auth` 校验门户 Cookie，成功后才覆盖 `X-Review-Gateway`，API 必须同时校验令牌、项目会话及固定账号映射。API 没有公网端口，直接从 loopback 伪造头也不能绕过令牌。
+
+`GET /api/v1/auth/me` 在已验证网关、有效固定账号的条件下签发项目会话；Cookie 为 Secure/HttpOnly/SameSite=Strict，Path 为 `/review/`，使用支持子路径的 `__Secure-` 名称且不设置 Domain。根路径部署保留 `__Host-` Cookie。所有写请求继续校验 CSRF，门户模式禁止项目密码登录、注册、改密和单独退出。前端账号页返回门户管理登录；门户退出后所有项目请求重新由 Nginx拒绝。此模式仅映射现有单个门户管理员，不提供团队 SSO 或任意用户自动开户，也不复制门户密码或签名密钥。
+
+公开 `AuthConfig` 与 `AuthView` 增加 `login_mode`（`password/portal`）；默认密码模式行为兼容。前端 `BASE_URL` 同时决定路由与认证、文件上传和业务 API 的前缀。鉴权回归在 `tests/test_gateway_auth.py`，子路径旅程使用 `PLAYWRIGHT_APP_PREFIX=/review` 运行 `web/e2e/auth.spec.ts`。
+
+宝塔/门户模式的启动、升级及恢复必须始终保留相同 overlay 参数。现有第 3 节备份脚本只针对独立 Caddy 模式；此模式启用定时备份前，需要让备份与恢复脚本读取同一组 overlay，并包含宝塔 HTTPS 证书及门户 include。当前按用户要求未启用备份，不应直接套用该备份脚本。
+
+### 存储镜像来源
+
+原 MinIO 镜像仓库返回 401，生产配置改用 `Dockerfile.storage` 从官方源码构建 `RELEASE.2025-10-15T17-29-55Z`，核对完整提交 `9e49d5e7a648f00e26f2246f4dc28e6b07f8c84a`，使用 upstream entrypoint 保持 secret-file 行为。该版本修复会话策略绕过漏洞，见 [官方安全发布说明](https://github.com/minio/minio/releases/tag/RELEASE.2025-10-15T17-29-55Z)。首次编译需要下载 Go 依赖并限制编译并发为 2；运行时保留原 S3 适配和桶权限，验证 runtime 无管理员权限。现有生产数据升级前应另行核对存储格式和恢复方案，本次服务器为新建空存储卷。

@@ -1,4 +1,4 @@
-import { apiFetch, getCsrfToken } from "./client";
+import { apiFetch, apiUrl, getCsrfToken } from "./client";
 
 export type DocumentStatus =
   | "uploaded"
@@ -31,27 +31,9 @@ export interface CitationLocator {
   path: string[];
 }
 
-export interface DocumentContent {
-  ordinal: number;
-  content: string;
-  citation_locator: CitationLocator;
-}
-
-export interface DocumentContentLocation {
-  ordinal: number;
-  citation_locator: CitationLocator;
-}
-
 export interface DocumentListResponse {
   items: DocumentSummary[];
   next_cursor: string | null;
-}
-
-export interface DocumentContentResponse {
-  document_id: string;
-  content_count: number;
-  contents: DocumentContent[];
-  locations: DocumentContentLocation[];
 }
 
 interface ErrorEnvelope {
@@ -90,9 +72,17 @@ export async function parseResponse<T>(response: Response): Promise<T> {
   );
 }
 
-export async function listDocuments(cursor?: string): Promise<DocumentListResponse> {
+export interface DocumentFilters {
+  search?: string;
+  status?: string;
+  sort?: "newest" | "oldest";
+  collection_id?: string;
+}
+
+export async function listDocuments(cursor?: string, filters: DocumentFilters = {}): Promise<DocumentListResponse> {
   const query = new URLSearchParams({ limit: "30" });
   if (cursor) query.set("cursor", cursor);
+  for (const [key, value] of Object.entries(filters)) { if (value) query.set(key, value); }
   const response = await apiFetch(`/api/v1/documents?${query}`, { headers: { Accept: "application/json" } });
   return parseResponse<DocumentListResponse>(response);
 }
@@ -104,17 +94,13 @@ export async function getDocument(documentId: string): Promise<DocumentSummary> 
   return parseResponse<DocumentSummary>(response);
 }
 
-export async function getDocumentContent(
-  documentId: string,
-  ordinal: number,
-  versionId?: number,
-): Promise<DocumentContentResponse> {
-  const query = new URLSearchParams({ ordinal: String(ordinal) });
-  if (versionId !== undefined) query.set("version_id", String(versionId));
-  const response = await apiFetch(`/api/v1/documents/${documentId}/content?${query}`, {
-    headers: { Accept: "application/json" },
+export async function getOriginalPdf(documentId: string, signal?: AbortSignal): Promise<Uint8Array> {
+  const response = await apiFetch(`/api/v1/documents/${documentId}/original`, {
+    headers: { Accept: "application/pdf" },
+    signal,
   });
-  return parseResponse<DocumentContentResponse>(response);
+  if (!response.ok) await parseResponse<never>(response);
+  return new Uint8Array(await response.arrayBuffer());
 }
 
 export async function retryDocument(documentId: string): Promise<DocumentSummary> {
@@ -141,7 +127,7 @@ export function uploadDocument(
 ): Promise<DocumentSummary> {
   return new Promise((resolve, reject) => {
     const request = new XMLHttpRequest();
-    request.open("POST", "/api/v1/documents");
+    request.open("POST", apiUrl("/api/v1/documents"));
     request.responseType = "json";
     request.setRequestHeader("Accept", "application/json");
     const csrfToken = getCsrfToken();

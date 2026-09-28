@@ -12,7 +12,7 @@ const labels: Record<DocumentStatus, string> = {
 export function StatusBadge({ status }: { status: DocumentStatus }) {
   const isBusy = status === "uploaded" || status === "queued" || status === "parsing";
   return (
-    <span className={`status status--${status}`}>
+    <span className={`status status--${status}`} key={status}>
       <span aria-hidden="true" className={isBusy ? "status__pulse" : "status__dot"} />
       {labels[status]}
     </span>

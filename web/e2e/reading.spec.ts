@@ -4,7 +4,7 @@ import { expect, test } from "@playwright/test";
 
 const pdfPath = process.env.E2E_PDF_PATH;
 
-test("upload a PDF and read its paginated text with the keyboard", async ({ page }) => {
+test("upload a PDF and preview its original pages with the keyboard", async ({ page }) => {
   test.skip(!pdfPath, "Set E2E_PDF_PATH to a local text PDF");
   await page.route("**/api/v1/auth/me", (route) => route.fulfill({ json: {
     user_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
@@ -18,13 +18,12 @@ test("upload a PDF and read its paginated text with the keyboard", async ({ page
 
   await page.getByRole("link", { name: /阅读/ }).first().click();
   await expect(page).toHaveURL(/\/documents\/[0-9a-f-]+/);
-  await expect(page.locator(".reading-page__number").filter({ hasText: "PAGE 01" })).toBeVisible({ timeout: 90_000 });
-  await expect(page.locator(".reading-page__content").first()).not.toBeEmpty();
+  await expect(page.getByRole("img", { name: "PDF 原文件第 1 页" })).toBeVisible({ timeout: 90_000 });
 
   await page.keyboard.press("]");
-  await expect(page.getByLabel("第 2 页")).toHaveClass(/reading-page--current/);
+  await expect(page.getByRole("img", { name: "PDF 原文件第 2 页" })).toBeVisible();
   await expect(page.getByText(/第 2 \/ \d+ 页/)).toBeVisible();
 
-  await page.getByRole("button", { name: "放大正文字号" }).click();
-  await expect(page.getByText("18px")).toBeVisible();
+  await page.getByRole("button", { name: "放大 PDF" }).click();
+  await expect(page.getByText("125%")).toBeVisible();
 });

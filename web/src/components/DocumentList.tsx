@@ -6,8 +6,8 @@ import { Icon } from "./Icon";
 import { StatusBadge } from "./StatusBadge";
 
 function formatBytes(bytes: number): string {
-  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  if (bytes < 1024 * 1024) return `${new Intl.NumberFormat("zh-CN").format(Math.max(1, Math.round(bytes / 1024)))}\u00a0KB`;
+  return `${new Intl.NumberFormat("zh-CN", { minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(bytes / 1024 / 1024)}\u00a0MB`;
 }
 
 function formatDate(value: string): string {
@@ -25,6 +25,11 @@ interface DocumentListProps {
   isLoadingMore: boolean;
   hasMore: boolean;
   onLoadMore: () => void;
+  selectedIds?: string[];
+  selectionDisabled?: boolean;
+  onToggleSelection?: (id: string) => void;
+  emptyTitle?: string;
+  emptyDescription?: string;
 }
 
 export function DocumentList({
@@ -33,6 +38,9 @@ export function DocumentList({
   isLoadingMore,
   hasMore,
   onLoadMore,
+  selectedIds, selectionDisabled, onToggleSelection,
+  emptyTitle = "资料库还是空的",
+  emptyDescription = "上传第一份 PDF、DOCX 或 PPTX，解析完成后即可按来源位置阅读。",
 }: DocumentListProps) {
   if (isLoading) {
     return (
@@ -46,24 +54,24 @@ export function DocumentList({
     return (
       <div className="empty-state">
         <span><Icon name="library" /></span>
-        <h3>资料库还是空的</h3>
-        <p>上传第一份 PDF、DOCX 或 PPTX，解析完成后即可按来源位置阅读。</p>
+        <h3>{emptyTitle}</h3>
+        <p>{emptyDescription}</p>
       </div>
     );
   }
 
   return (
     <>
-      <div className="document-grid">
+      <div className={`document-grid${documents.length > 50 ? " document-grid--large" : ""}`}>
         {documents.map((document) => {
           const canOpen = document.status === "ready" || document.status === "failed";
           return (
-            <article className="document-card" key={document.id}>
-              <div className="document-card__icon"><Icon name="document" /></div>
+            <article className={`document-card${selectedIds ? " document-card--selecting" : ""}`} key={document.id}>
+              {selectedIds ? <label className="document-selection"><input aria-label={`选择 ${document.filename}`} type="checkbox" checked={selectedIds.includes(document.id)} disabled={selectionDisabled || (selectedIds.length >= 100 && !selectedIds.includes(document.id))} onChange={() => onToggleSelection?.(document.id)} /></label> : null}
               <div className="document-card__body">
                 <div className="document-card__topline">
                   <StatusBadge status={document.status} />
-                  <span>{formatDate(document.updated_at)}</span>
+                  <time dateTime={document.updated_at}>{formatDate(document.updated_at)}</time>
                 </div>
                 <h3>{document.filename}</h3>
                 <p>

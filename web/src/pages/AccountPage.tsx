@@ -42,23 +42,24 @@ export function AccountPage({ identity }: { identity: AuthIdentity }) {
 
   return <div className="app-page">
     <AppHeader />
-    <main className="account-page" id="main-content">
-      <span className="eyebrow">账号与安全</span>
+    <main className="account-page" id="main-content" tabIndex={-1}>
+      <header className="learning-heading">
       <h1>我的账号</h1>
-      <p>当前登录：{identity.email}</p>
-      <button className="button button--secondary" disabled={busy} onClick={() => void signOut()} type="button">退出登录</button>
-      <section className="account-password" aria-labelledby="change-password-title">
+      </header>
+      <section className="learning-card account-identity"><div><h2>登录信息</h2><p>当前登录：{identity.login_mode === "portal" ? "门户管理员" : identity.email}</p></div>
+      {identity.login_mode === "portal" ? <a className="button button--secondary" href="/">返回门户管理登录</a> : <button className="button button--secondary" disabled={busy} onClick={() => void signOut()} type="button">退出登录</button>}</section>
+      {identity.login_mode === "portal" ? <section className="learning-card"><p>登录和密码由门户统一管理，退出门户后此项目也会停止访问。</p></section> : <section className="account-password learning-card" aria-labelledby="change-password-title">
         <h2 id="change-password-title">修改密码</h2>
         <p>修改后需要使用新密码重新登录。</p>
         <form onSubmit={(event) => void submit(event)}>
           <label htmlFor="current-password">当前密码</label>
-          <input id="current-password" autoComplete="current-password" type="password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} required />
+          <input id="current-password" name="current-password" aria-describedby={error ? "password-error" : undefined} autoComplete="current-password" type="password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} required />
           <label htmlFor="new-password">新密码</label>
-          <input id="new-password" autoComplete="new-password" type="password" minLength={12} value={newPassword} onChange={(event) => setNewPassword(event.target.value)} required />
-          {error ? <p className="field-error" role="alert">{error}</p> : null}
+          <input id="new-password" name="new-password" aria-describedby={error ? "password-error" : undefined} autoComplete="new-password" type="password" minLength={12} value={newPassword} onChange={(event) => setNewPassword(event.target.value)} required />
+          {error ? <p className="field-error" id="password-error" role="alert">{error}</p> : null}
           <button className="button button--primary" disabled={busy} type="submit">保存新密码</button>
         </form>
-      </section>
+      </section>}
     </main>
   </div>;
 }

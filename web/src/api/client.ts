@@ -1,5 +1,9 @@
 let csrfToken: string | null = null;
 
+export function apiUrl(input: string): string {
+  return input.startsWith("/api/") ? `${import.meta.env.BASE_URL.replace(/\/$/, "")}${input}` : input;
+}
+
 export function setCsrfToken(token: string | null): void {
   csrfToken = token;
 }
@@ -14,7 +18,7 @@ export async function apiFetch(input: string, init: RequestInit = {}): Promise<R
   if (method !== "GET" && method !== "HEAD" && csrfToken) {
     headers.set("X-CSRF-Token", csrfToken);
   }
-  const response = await fetch(input, { ...init, credentials: "same-origin", headers });
+  const response = await fetch(apiUrl(input), { ...init, credentials: "same-origin", headers });
   if (response.status === 401 && !input.startsWith("/api/v1/auth/me")) {
     window.dispatchEvent(new Event("review-agent-auth-expired"));
   }

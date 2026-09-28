@@ -15,32 +15,35 @@ API、领域逻辑和数据访问先部署为一个应用，但代码按领域�
 
 - PostgreSQL 保存业务数据、处理状态和审计数据。
 - pgvector 保存首版向量，降低数据同步复杂度。
-- 原始文件和解析产物放对象存储；数据库只保存对象键、哈希和元数据。
-- Redis 仅作为任务队列、短期缓存或限流，不保存不可恢复的业务事实。
+- 原始文件放私有对象存储；有序解析正文、分块、向量、来源定位与业务元数据保存在 PostgreSQL，便于授权查询和版本追溯。
+- PDF 预览通过带工作区授权的 `/api/v1/documents/{id}/original` 获取私有原文件，API 在事务结束后下载并临时发送，响应结束即清理；前端按需加载 PDF.js 绘制当前页，页数由原文件确定，预览不依赖解析完成。提取正文仅供后台检索、问答和练习使用；DOCX/PPTX 前端显示暂不支持预览。
+- Redis 当前只用于短期限流；未来若引入队列或缓存，也不保存不可恢复的业务事实。
 
 ### 1.3 外部能力必须通过端口适配
 
 LLM、Embedding、重排、对象存储、文档解析、任务队列均定义应用侧接口。领域用例依赖接口，不直接依赖 OpenAI SDK、S3 SDK、某个解析库或队列实现。
 
-## 2. 目标架构
+## 2. 架构概览
+
+图中 PostgreSQL 任务投递与 Redis 限流是当前路径；SSE 是后续目标，当前问答与学习任务由前端轮询状态。
 
 ```mermaid
 flowchart LR
-    UI[Web UI] -->|HTTPS / SSE| API[FastAPI API]
+    UI[Web UI] -->|HTTPS / 状态轮询| API[FastAPI API]
     API --> AUTH[认证与授权]
     API --> PG[(PostgreSQL + pgvector)]
     API --> OBJ[(对象存储)]
-    API --> Q[任务队列]
-    Q --> WORKER[Document / AI Workers]
+    PG -->|持久任务与租约| WORKER[Document / AI Workers]
     WORKER --> OBJ
     WORKER --> PG
     WORKER --> PARSER[文档解析适配器]
-    WORKER --> AI[LLM / Embedding / Reranker]
+    WORKER --> AI[LLM / Embedding]
+    API --> REDIS[(Redis 限流)]
     API --> OBS[日志 / 指标 / Trace]
     WORKER --> OBS
 ```
 
-当前本地环境用 Docker Compose 运行 React Web、API、Worker、PostgreSQL、Redis 和兼容 S3 的 MinIO。Web 通过同源代理调用 API；用户使用邮箱、密码和服务端会话登录。认证账号与工作区成员关系位于应用 schema，密码哈希与会话摘要位于独立认证 schema。单台云服务器生产配置见 [上线与数据恢复手册](./production-operations.md)：Caddy 提供 HTTPS 与静态页面，内部服务不发布端口，凭据按服务通过秘密文件挂载，异机备份成对保存数据库与原文件；实际域名、备份目的地和监控告警仍需部署者配置。生产 Cookie 使用 Secure/HttpOnly/SameSite 和 CSRF 校验；本地脚本令牌仅在开发模式有效。
+当前本地环境用 Docker Compose 运行 React Web、API、Worker、PostgreSQL、Redis 和兼容 S3 的 MinIO。Web 通过同源代理调用 API；用户使用邮箱、密码和服务端会话登录。认证账号与工作区成员关系位于应用 schema，密码哈希与会话摘要位于独立认证 schema。单机独立站点方案使用 Caddy；[当前 fisher-ai.com 部署](./deployment-fisher-ai.md)使用宝塔 Nginx 子路径和现有门户身份。两种部署方式与恢复要求见[生产运维手册](./production-operations.md)。当前线上未启用异机备份，不能宣称已完成恢复演练。生产 Cookie 使用 Secure/HttpOnly/SameSite 和 CSRF 校验；本地脚本令牌仅在开发模式有效。
 
 ### 2.1 技术选型基线
 
@@ -71,29 +74,19 @@ flowchart LR
 
 ## 3. 代码边界
 
+以下是当前代码的主要目录；随着业务演进按真实边界增补，不为目标架构预建空模块。
+
 ```text
 app/
-  main.py                    # 应用组装，不放业务规则
-  api/                       # 路由、鉴权依赖、HTTP schema
-    v1/
-  core/                      # 配置、日志、数据库、通用安全能力
-  documents/
-    domain/                  # 实体、值对象、领域规则
-    application/             # 上传/索引/删除用例，端口定义
-    infrastructure/          # SQLAlchemy、存储、解析器实现
-  rag/
-    domain/
-    application/
-    infrastructure/
-  conversations/
-  quizzes/
-  jobs/                      # 任务入口、重试策略，不复制业务逻辑
-  shared/                    # 极少量稳定的跨领域类型
-tests/
-  unit/
-  integration/
-  contract/
-  e2e/
+  main.py                    # 应用组装
+  auth/                      # 账号、会话与工作区身份
+  core/                      # 配置、数据库、日志与通用安全能力
+  documents/                 # 文档领域、应用用例与基础设施适配器
+  rag/                       # 索引、检索、引用与单资料问答
+  learning/                  # 集合、对话、Quiz、Agent 运行与组织
+  jobs/                      # Worker 入口与心跳
+tests/                       # 后端行为与集成测试
+web/                         # React 页面、组件及前端测试
 ```
 
 依赖方向：
@@ -114,13 +107,13 @@ Domain 不导入 FastAPI、SQLAlchemy、模型 SDK、Redis 或对象存储 SDK�
 3. 文档与 `document_parse` 任务通过数据库幂等键持久化，API 立即返回 `202 Accepted`；迁移期仍允许消费已有 `pdf_parse` 任务。
 4. Worker 通过 `FOR UPDATE SKIP LOCKED` 和租约领取任务，下载文件，在禁止网络且具有超时、内容量和解压上限的子进程中解析。
 5. PDF 页、DOCX 标题段和 PPTX 幻灯片统一写入有序内容单元；每个单元携带 `citation_locator`（kind、position、title、path）。版本创建与 `active_version_id` 切换在同一事务完成，同一来源和解析器版本不会重复写入。
-6. 后续分块与 Embedding 完成后，继续沿版本化产物和原子激活扩展，禁止暴露半成品。
+6. 后续分块与 Embedding 写入对应 profile 的版本化索引；只有全部向量完成后索引才标为 `ready`，未完成索引不可用于问答。
 
 重要约束：任务采用至少一次投递，因此每一步必须幂等；禁止假定任务只执行一次。
 
 ### 4.2 RAG 问答
 
-单资料闭环见 [RAG 实现与验收](./rag-implementation.md)。`learning` 模块在此基础上实现集合、多资料范围、连续对话、反馈与 Quiz。API 在短事务中持久化任务，Worker 执行模型调用后以租约标识原子发布；解析状态与索引状态独立。回答引用和 Quiz 来源绑定不可变解析版本，阅读器允许定位历史版本。下列流程中流式返回和摘要仍是目标能力，目前使用轮询并传入同一范围最近的消息。
+单资料闭环见 [RAG 实现与验收](./rag-implementation.md)。`learning` 模块在此基础上实现集合、多资料范围、连续对话、反馈与 Quiz。多资料问答使用模型选择只读工具的受控 Agent；Quiz 可显式选择实验 Agent 模式，默认 Quiz 和单资料旧接口保留固定流程。API 在短事务中持久化任务，Worker 执行模型调用后以租约标识原子发布；解析状态与索引状态独立。回答引用和 Quiz 来源绑定不可变解析版本，阅读器允许定位历史版本。下列流程中流式返回和摘要仍是目标能力，目前使用轮询并传入同一范围最近的消息。
 
 ```text
 问题 + 对话摘要 + 资料范围
@@ -131,10 +124,10 @@ Domain 不导入 FastAPI、SQLAlchemy、模型 SDK、Redis 或对象存储 SDK�
   → 上下文预算组装
   → 带引用生成
   → 引用/输出校验
-  → 流式返回并持久化
+  → 校验后持久化，前端轮询结果
 ```
 
-权限过滤必须进入检索 SQL，而不是检索后在 Python 中过滤，防止越权内容进入模型上下文。原始用户问题、检索结果、Prompt 版本、模型参数、Token 与引用关系应可审计，但日志默认不记录完整文档正文。
+权限过滤必须进入检索 SQL，而不是检索后在 Python 中过滤，防止越权内容进入模型上下文。审计记录使用稳定 ID、策略版本、用量与结果类别；普通日志不记录用户问题、检索正文、Prompt 或完整回答。
 
 ### 4.3 Quiz 生成
 
@@ -148,7 +141,17 @@ Quiz 生成不是一次自由文本调用，而是受约束的流水线：
 
 ## 5. Agent 设计边界
 
-MVP 使用受控工作流 Agent，而不是无限循环的通用 Agent。
+当前学习助手先规划用户请求为问答、创建 Quiz、复习错题、薄弱点练习或澄清，再由应用执行对应流程；资料检索限于用户所选范围。详细分阶段方案见 [Agent 开发计划](./agent-development-plan.md)。
+
+- 模型只能选择 `search`、`read_source` 和 `answer`；Pydantic 校验动作与参数，应用侧执行工具。`read_source` 只能读取本次限域检索命中的来源。
+- 证据规划最多 5 个工具步骤、2 次搜索、3 次读取。统一对话最多 7 次模型调用（任务规划 1 + 证据规划最多 5 + 最终生成 1），共用 18,000 计费 Token、30,000 加权费用单位和 110 秒超时；独立 Quiz 无任务规划，最多 6 次。加权单位用于限制相对支出，不等同真实美元价格。
+- 工具轨迹只持久化动作、命中数量及已读来源 ID，不保存搜索词、资料正文或完整 Prompt。最终回答仍必须通过来源摘录校验；没有读取有效证据时只能返回证据不足。
+- Quiz Agent 只能选择 `search`、`read_source`、`generate_quiz`，不能使用问答的终止工具，也不能修改蓝图或直接发布。复用限域证据执行器与预算；应用校验候选后将题目和私有 `generation_usage` 一起发布。实验模式由 `config.generation_mode` 显式开启。
+- 每步规划前、返回后与最终生成前检查任务租约及资料有效性；取消或删除后不继续启动后续付费调用，已发出的请求可能无法撤回。
+- 对话出题的数量/题型/难度采用严格蓝图；模型无权选择 workspace、资料 ID、作答 ID 或发布接口。应用从当前精确范围读取最近已提交作答，替换薄弱点参数；不会让模型创造成绩。Quiz 与消息结果在同一事务发布，无第二套任务状态。数据库空间锁串行预留每小时 20 次出题配额，对话与独立 Quiz 共用限额。
+- 已有 20 条版本化合成评测样本和显式付费的基线对比入口；真实资料语义评测、供应商账单校准和全局费用告警仍待完成。
+
+更广的 Agent 能力继续遵守以下设计边界：
 
 - 可用工具采用允许列表：检索资料、读取指定来源、生成 Quiz 草稿、保存结果。
 - 每次运行设置最大步骤、超时、Token 和费用预算。
@@ -227,3 +230,7 @@ MVP 使用受控工作流 Agent，而不是无限循环的通用 Agent。
 
 - [pgvector 官方文档](https://github.com/pgvector/pgvector)：近似索引、混合检索、过滤、迭代扫描和多租户注意事项。
 - [Celery 官方文档](https://docs.celeryq.dev/en/stable/getting-started/introduction.html)：任务队列、broker 和多 Worker 模型。
+
+## 13. 学习工作流实现（0014）
+
+`AgentRunProcessor` 通过 `AgentRunPersistence` 和 `StudyExecutor` 端口执行业务阶段；SQLAlchemy 存储和 LangGraph 证据节点均在适配器边界。API 创建运行后立即返回，Worker 执行耗时调用；已评分 attempt 与后续 review 排队同事务写入。PostgreSQL 仍是唯一事实源，Redis 保持限流/可替换用途。完整图持久化取舍见 [ADR-0002](./adr/0002-agent-business-checkpoints.md)。

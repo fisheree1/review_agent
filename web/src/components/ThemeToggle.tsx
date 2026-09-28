@@ -1,21 +1,15 @@
 import { useEffect, useState } from "react";
 
 import { Icon } from "./Icon";
-
-type Theme = "light" | "dark";
-
-function initialTheme(): Theme {
-  const stored = localStorage.getItem("review-agent-theme");
-  if (stored === "light" || stored === "dark") return stored;
-  return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
-}
+import { applyTheme, initialTheme, type Theme } from "../theme";
 
 export function ThemeToggle() {
   const [theme, setTheme] = useState<Theme>(initialTheme);
 
   useEffect(() => {
-    document.documentElement.dataset.theme = theme;
-    localStorage.setItem("review-agent-theme", theme);
+    applyTheme(theme);
+    try { localStorage.setItem("review-agent-theme", theme); }
+    catch { /* Keep the selected theme for this page when storage is unavailable. */ }
   }, [theme]);
 
   const nextTheme = theme === "light" ? "dark" : "light";
