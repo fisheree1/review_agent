@@ -40,14 +40,9 @@ class DocumentJobProcessor:
             job.document_public_id,
         )
 
-        suffix_by_media_type = {
-            "application/pdf": ".pdf",
-            "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
-            "application/vnd.openxmlformats-officedocument.presentationml.presentation": ".pptx",
-        }
         descriptor, temporary_name = tempfile.mkstemp(
             prefix="review-agent-worker-",
-            suffix=suffix_by_media_type.get(job.media_type, ".bin"),
+            suffix=".pdf" if job.media_type == "application/pdf" else ".bin",
         )
         os.close(descriptor)
         source_path = Path(temporary_name)

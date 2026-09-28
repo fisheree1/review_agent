@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import re
 from collections import Counter
 from typing import Any
 
 from app.rag.domain import Evidence, RagFailure
 
-QUIZ_SCHEMA_VERSION = "quiz-cited-v1"
-QUIZ_PROMPT_VERSION = "quiz-blueprint-v1"
+QUIZ_SCHEMA_VERSION = "quiz-cited-v2"
+MONOLINGUAL_QUIZ_SCHEMA_VERSION = "quiz-cited-v1"
+QUIZ_PROMPT_VERSION = "quiz-blueprint-v2"
 QUESTION_TYPES = ("single", "multiple", "true_false", "short")
 DIFFICULTIES = ("easy", "medium", "hard")
 
@@ -25,7 +27,7 @@ def validate_blueprint(config: dict[str, Any]) -> dict[str, Any]:
     generation_mode = config.get("generation_mode", "standard")
     if generation_mode not in ("standard", "agent"):
         raise ValueError("Invalid generation mode")
-    if difficulty not in DIFFICULTIES or language not in ("zh", "en"):
+    if difficulty not in DIFFICULTIES or language not in ("zh", "en", "zh-en"):
         raise ValueError("Invalid difficulty or language")
     if not isinstance(topic, str) or len(topic.strip()) > 120:
         raise ValueError("Invalid topic")
@@ -34,12 +36,23 @@ def validate_blueprint(config: dict[str, Any]) -> dict[str, Any]:
         "difficulty": difficulty,
         "language": language,
         "topic": topic.strip(),
-        "schema_version": QUIZ_SCHEMA_VERSION,
+        "schema_version": (
+            QUIZ_SCHEMA_VERSION if language == "zh-en" else MONOLINGUAL_QUIZ_SCHEMA_VERSION
+        ),
     }
     # Preserve old standard-mode configs for idempotent retries across the rollout.
     if generation_mode == "agent":
         blueprint["generation_mode"] = generation_mode
     return blueprint
+
+
+def has_bilingual_pair(value: str) -> bool:
+    lines = value.strip().splitlines()
+    if len(lines) != 2 or not lines[0].startswith("中文：") or not lines[1].startswith("English: "):
+        return False
+    chinese = lines[0].removeprefix("中文：").strip()
+    english = lines[1].removeprefix("English: ").strip()
+    return bool(re.search(r"[\u4e00-\u9fff]", chinese) and re.search(r"[A-Za-z]", english))
 
 
 def validate_candidates(
@@ -118,6 +131,14 @@ def validate_candidates(
             ):
                 continue
             options = []
+        if config["language"] == "zh-en" and (
+            not has_bilingual_pair(stem)
+            or not has_bilingual_pair(topic)
+            or not has_bilingual_pair(explanation)
+            or any(not has_bilingual_pair(option) for option in options)
+            or (kind == "short" and (not isinstance(answer, str) or not has_bilingual_pair(answer)))
+        ):
+            continue
         if not isinstance(citations, list) or not 1 <= len(citations) <= 3:
             continue
         checked: list[dict[str, Any]] = []
@@ -157,7 +178,7 @@ def validate_candidates(
                 "answer": answer,
                 "explanation": explanation.strip(),
                 "sources": checked,
-                "schema_version": QUIZ_SCHEMA_VERSION,
+                "schema_version": config["schema_version"],
             }
         )
         counts[kind] += 1

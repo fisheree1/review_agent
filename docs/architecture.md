@@ -16,7 +16,7 @@ API、领域逻辑和数据访问先部署为一个应用，但代码按领域�
 - PostgreSQL 保存业务数据、处理状态和审计数据。
 - pgvector 保存首版向量，降低数据同步复杂度。
 - 原始文件放私有对象存储；有序解析正文、分块、向量、来源定位与业务元数据保存在 PostgreSQL，便于授权查询和版本追溯。
-- PDF 预览通过带工作区授权的 `/api/v1/documents/{id}/original` 获取私有原文件，API 在事务结束后下载并临时发送，响应结束即清理；前端按需加载 PDF.js 绘制当前页，页数由原文件确定，预览不依赖解析完成。提取正文仅供后台检索、问答和练习使用；DOCX/PPTX 前端显示暂不支持预览。
+- PDF 预览通过带工作区授权的 `/api/v1/documents/{id}/original` 获取私有原文件，API 在事务结束后下载并临时发送，响应结束即清理；前端按需加载 PDF.js 绘制当前页，页数由原文件确定，预览不依赖解析完成。提取正文仅供后台检索、问答和练习使用；新上传只接受 PDF，历史非 PDF 记录仍可读取已保存的引用。
 - Redis 当前只用于短期限流；未来若引入队列或缓存，也不保存不可恢复的业务事实。
 
 ### 1.3 外部能力必须通过端口适配
@@ -106,7 +106,7 @@ Domain 不导入 FastAPI、SQLAlchemy、模型 SDK、Redis 或对象存储 SDK�
 2. API 用 workspace/document UUID 生成对象键，将原文件写入私有对象存储；原始文件名不参与路径。
 3. 文档与 `document_parse` 任务通过数据库幂等键持久化，API 立即返回 `202 Accepted`；迁移期仍允许消费已有 `pdf_parse` 任务。
 4. Worker 通过 `FOR UPDATE SKIP LOCKED` 和租约领取任务，下载文件，在禁止网络且具有超时、内容量和解压上限的子进程中解析。
-5. PDF 页、DOCX 标题段和 PPTX 幻灯片统一写入有序内容单元；每个单元携带 `citation_locator`（kind、position、title、path）。版本创建与 `active_version_id` 切换在同一事务完成，同一来源和解析器版本不会重复写入。
+5. 新资料的 PDF 页写入有序内容单元；每个单元携带 `citation_locator`（kind、position、title、path）。历史资料的标题和幻灯片 locator 保持可读。版本创建与 `active_version_id` 切换在同一事务完成，同一来源和解析器版本不会重复写入。
 6. 后续分块与 Embedding 写入对应 profile 的版本化索引；只有全部向量完成后索引才标为 `ready`，未完成索引不可用于问答。
 
 重要约束：任务采用至少一次投递，因此每一步必须幂等；禁止假定任务只执行一次。
@@ -175,7 +175,7 @@ Quiz 生成不是一次自由文本调用，而是受约束的流水线：
 
 ## 7. 性能设计
 
-- API 进程不执行 OCR、Office 转换、长文本解析或大批量 Embedding。
+- API 进程不执行 OCR、长文本解析或大批量 Embedding。
 - 上传和下载流式处理，不把整文件读入内存；生产优先使用对象存储签名 URL。
 - 文档列表使用游标分页；禁止无限列表和深度 offset。
 - Embedding 批处理并设置供应商并发上限；失败使用指数退避和抖动。

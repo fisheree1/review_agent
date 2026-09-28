@@ -4,7 +4,6 @@ import { ApiError, uploadDocument } from "../api/documents";
 
 const MAX_FILE_SIZE = 25 * 1024 * 1024;
 const MAX_BATCH_FILES = 10;
-const SUPPORTED_EXTENSIONS = [".pdf", ".docx", ".pptx"];
 
 type UploadStatus = "selected" | "uploading" | "completed" | "failed";
 
@@ -23,8 +22,8 @@ interface UploadPanelProps {
 }
 
 function validateFile(file: File): string | null {
-  if (!SUPPORTED_EXTENSIONS.some((extension) => file.name.toLowerCase().endsWith(extension))) {
-    return "目前支持 PDF、DOCX 和 PPTX 文件。";
+  if (!file.name.toLowerCase().endsWith(".pdf")) {
+    return "目前仅支持 PDF 文件。";
   }
   if (file.size > MAX_FILE_SIZE) return "超过 25 MB，请先压缩或拆分。";
   if (file.size === 0) return "文件为空，请重新选择。";
@@ -95,10 +94,10 @@ export function UploadPanel({ onUploaded }: UploadPanelProps) {
   const pendingCount = items.filter((item) => item.valid && item.status !== "completed").length;
   const completedCount = items.filter((item) => item.status === "completed").length;
   return (
-    <section aria-labelledby="upload-title" className="upload-panel" id="upload-materials">
+    <section aria-labelledby="upload-title" className="upload-panel" id="upload-materials" tabIndex={-1}>
       <div className="upload-panel__copy">
         <h2 id="upload-title">上传资料</h2>
-        <p>PDF、DOCX、PPTX · 最多 10 份 · 每份 25 MB</p>
+        <p>PDF · 最多 10 份 · 每份 25 MB</p>
       </div>
       <div
         className={`drop-zone${isDragging ? " drop-zone--active" : ""}`}
@@ -112,7 +111,7 @@ export function UploadPanel({ onUploaded }: UploadPanelProps) {
       >
         <strong>拖放文件到这里</strong>
         <input
-          accept="application/pdf,.pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,.docx,application/vnd.openxmlformats-officedocument.presentationml.presentation,.pptx"
+          accept="application/pdf,.pdf"
           className="visually-hidden" id="document-file" disabled={isUploading} multiple
           onChange={(event) => { if (event.target.files) chooseFiles(event.target.files); event.target.value = ""; }}
           ref={inputRef} type="file"

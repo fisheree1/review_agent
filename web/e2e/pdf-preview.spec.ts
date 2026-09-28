@@ -11,7 +11,7 @@ const document = {
   created_at: "2026-09-28T00:00:00Z", updated_at: "2026-09-28T00:00:00Z",
 };
 
-test("PDF preview opens directly while parsing; Office files show unsupported preview", async ({ page }) => {
+test("PDF preview opens directly while parsing without requesting extracted text", async ({ page }) => {
   let contentRequests = 0;
   let originalRequests = 0;
   await page.route("**/api/v1/auth/me", (route) => route.fulfill({ json: {
@@ -29,11 +29,7 @@ test("PDF preview opens directly while parsing; Office files show unsupported pr
       contentRequests += 1;
       return route.fulfill({ status: 500 });
     }
-    const officeType = path.endsWith("22222222-2222-4222-8222-222222222222")
-      ? "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-      : "application/vnd.openxmlformats-officedocument.presentationml.presentation";
-    const office = { ...document, id: path.split("/").at(-1), filename: officeType.includes("wordprocessing") ? "Notes.docx" : "Slides.pptx", media_type: officeType, status: "ready" };
-    return route.fulfill({ json: path.endsWith(documentId) ? document : path.endsWith("22222222-2222-4222-8222-222222222222") || path.endsWith("33333333-3333-4333-8333-333333333333") ? office : { items: [document], next_cursor: null } });
+    return route.fulfill({ json: path.endsWith(documentId) ? document : { items: [document], next_cursor: null } });
   });
 
   await page.goto(`/documents/${documentId}`);
@@ -45,14 +41,6 @@ test("PDF preview opens directly while parsing; Office files show unsupported pr
   await page.getByRole("button", { name: "下一页" }).click();
   await expect(page.getByRole("img", { name: "PDF 原文件第 2 页" })).toBeVisible();
   expect(contentRequests).toBe(0);
-  const pdfOriginalRequests = originalRequests;
-  expect(pdfOriginalRequests).toBeGreaterThan(0);
-
-  for (const officeId of ["22222222-2222-4222-8222-222222222222", "33333333-3333-4333-8333-333333333333"]) {
-    await page.goto(`/documents/${officeId}`);
-    await expect(page.getByRole("heading", { name: "暂不支持预览" })).toBeVisible();
-    await expect(page.getByRole("img", { name: /PDF 原文件/ })).toHaveCount(0);
-  }
-  expect(originalRequests).toBe(pdfOriginalRequests);
+  expect(originalRequests).toBeGreaterThan(0);
   expect(contentRequests).toBe(0);
 });

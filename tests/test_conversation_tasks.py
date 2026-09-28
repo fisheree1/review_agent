@@ -84,6 +84,13 @@ def test_chat_quiz_is_validated_before_atomic_message_publication() -> None:
     store.finish_message.assert_not_awaited()
 
 
+def test_chat_task_plan_accepts_chinese_english_quiz_language() -> None:
+    plan = validate_task_plan(
+        {"action": "create_quiz", "title": "双语练习", "config": {**CONFIG, "language": "zh-en"}}
+    )
+    assert plan.quiz_config()["language"] == "zh-en"
+
+
 def test_chat_weak_practice_uses_actual_scoped_weak_topics_instead_of_model_topic() -> None:
     worker, store, _, model = processor(
         {"action": "practice_weak_topics", "title": "Targeted Practice", "config": CONFIG},

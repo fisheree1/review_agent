@@ -21,7 +21,7 @@ docker compose run --rm database-init alembic check
 docker compose exec -T api python -m scripts.verify_runtime_database_access
 ```
 
-升级保留当前 PDF/DOCX/PPTX、正文及旧 Voyage 索引；已有资料不自动发送到云端。新 Embedding profile 不读取旧向量。打开资料，选择“基于此资料提问”，再选择“准备资料问答”，才会用百炼重新建立该资料的索引。正文与检索问题发送到百炼，问题和检索到的最多 6 个片段发送到 DeepSeek。
+历史升级保留了 PDF/DOCX/PPTX、正文及旧 Voyage 索引；当前版本的新上传只接受 PDF，已有资料不自动发送到云端。新 Embedding profile 不读取旧向量。打开资料，选择“基于此资料提问”，再选择“准备资料问答”，才会用百炼重新建立该资料的索引。正文与检索问题发送到百炼，问题和检索到的最多 6 个片段发送到 DeepSeek。
 
 可单独执行 `docker compose exec -T worker python -m scripts.verify_model_access` 检查两个服务。此命令各发一个短合成文本请求，可能消耗额度，只输出服务状态、维度与生成 Token 数，不输出密钥或正文。普通测试不调用真实 API。
 
@@ -30,7 +30,7 @@ docker compose exec -T api python -m scripts.verify_runtime_database_access
 ## 当前技术决策
 
 - `document_indexes` 绑定不可变解析版本和 embedding profile；唯一键保证同版本同策略不重复索引。索引未完成时不能提问，旧 Voyage profile 保留但不被新百炼 profile 读取；更换策略不会原地覆盖旧向量。不需要数据库迁移或清空旧索引。若确定不再需要旧索引，应另做受控清理，而非在此切换中删除。
-- 分块 `source-window-1500-180-v1`：每块最多 1500 字符、重叠 180 字符，不跨 PDF 页/DOCX 标题段/PPTX 幻灯片。保存内容单元、字符起止、原文；首版不是模型 Token tokenizer，后续按评测调整。单份资料最多 5000 块。
+- 分块 `source-window-1500-180-v1`：每块最多 1500 字符、重叠 180 字符，新 PDF 不跨页；历史非 PDF 资料保留原有内容单元。保存内容单元、字符起止、原文；首版不是模型 Token tokenizer，后续按评测调整。单份资料最多 5000 块。
 - 每次领取处理最多 16 块，提交结果后让出执行机会；已保存向量跳过。只有全部块完成才原子切换为 `ready`，正文 `ready` 不受索引失败影响。
 - 任务使用 180 秒租约和唯一执行令牌，迟到的旧执行者不能发布结果；模型调用在事务之外。问答总时间上限 110 秒，输出上限 3000 Token；每个空间最多同时 3 个问题、每小时 60 个。
 - 明确的模型故障进入可解释失败；不自动重发结果未知的付费请求。用户重试可复用已保存向量，但网络中断/进程崩溃后服务商可能已经计费，不能保证跨服务 exactly-once。

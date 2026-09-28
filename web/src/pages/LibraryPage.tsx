@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link, useSearchParams } from "react-router-dom";
+import { Link, useLocation, useSearchParams } from "react-router-dom";
 
 import { createCollection, listCollections } from "../api/learning";
 import { ContinueLearning } from "../components/ContinueLearning";
@@ -20,6 +20,7 @@ const statusOptions = [
 const sortOptions = [{ value: "newest", label: "最新上传" }, { value: "oldest", label: "最早上传" }] as const;
 
 export function LibraryPage() {
+  const location = useLocation();
   const [params, setParams] = useSearchParams();
   const query = params.get("search") ?? "";
   const status = ["ready", "processing", "failed"].includes(params.get("status") ?? "") ? params.get("status")! : "all";
@@ -27,6 +28,12 @@ export function LibraryPage() {
   const collectionId = params.get("collection") ?? "";
   const [search, setSearch] = useState(query);
   useEffect(() => { const timer = window.setTimeout(() => setSearch(query), 250); return () => clearTimeout(timer); }, [query]);
+  useEffect(() => {
+    if (location.hash !== "#upload-materials") return;
+    const upload = document.getElementById("upload-materials");
+    upload?.scrollIntoView({ block: "start" });
+    upload?.focus({ preventScroll: true });
+  }, [location.hash]);
   const { documents, error, isLoading, isLoadingMore, nextCursor, refresh, loadMore } = useDocuments({
     search: search.trim(), status: status === "all" ? undefined : status, sort, collection_id: collectionId || undefined,
   });
@@ -52,6 +59,7 @@ export function LibraryPage() {
           <Link className="button button--secondary" to="/study">进入学习空间</Link>
         </header>
         <div className="library-layout">
+        <div className="library-upload"><UploadPanel onUploaded={() => void refresh()} /></div>
         <section aria-labelledby="library-title" className="library-section">
           <div className="section-heading">
             <h2 id="library-title">全部资料</h2>
@@ -102,7 +110,6 @@ export function LibraryPage() {
           </div>
         </section>
         <aside className="library-utilities" aria-label="学习工具">
-          <UploadPanel onUploaded={() => void refresh()} />
           <ContinueLearning />
           <StudyCalendar />
         </aside>

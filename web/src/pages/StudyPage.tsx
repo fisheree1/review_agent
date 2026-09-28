@@ -83,7 +83,7 @@ export function StudyPage() {
   const { conversationId } = useParams();
   const navigate = useNavigate();
   const cache = useQueryClient();
-  const { documents, error: documentsError, nextCursor, loadMore, refresh: refreshDocuments } = useDocuments();
+  const { documents, error: documentsError, isLoading: documentsLoading, nextCursor, loadMore, refresh: refreshDocuments } = useDocuments();
   const collections = useQuery({ queryKey: ["collections"], queryFn: listCollections });
   const conversations = useInfiniteQuery({ queryKey: ["conversations"], initialPageParam: undefined as string | undefined,
     queryFn: ({ pageParam }) => listConversations(pageParam),
@@ -158,15 +158,19 @@ export function StudyPage() {
     ;
   const legacyWorking = detail.data?.messages.some((message) => !message.run_id && (message.status === "queued" || message.status === "processing")) ?? false;
   const canSend = Boolean(detail.data?.scope.length) && question.trim().length >= 2 && !ask.isPending && !legacyWorking;
+  const hasAvailableSource = Boolean(nextCursor) || documents.some((document) => document.status === "ready") || (collections.data ?? []).some((collection) => collection.document_ids.length > 0);
+  const processingDocuments = documents.some((document) => ["uploaded", "queued", "parsing"].includes(document.status));
+  const firstUse = !conversationId && !documentsLoading && !collections.isPending && !conversations.isPending
+    && !error && !hasAvailableSource && !(conversations.data?.pages.some((page) => page.length) ?? false);
   const draftTask = (request: string) => { setQuestion(request); composer.current?.focus(); };
 
   return <div className="app-page">
     <AppHeader />
     <main className="learning-page study-page" id="main-content" tabIndex={-1}>
-      <header className="learning-heading study-heading"><h1>学习空间</h1><button className="icon-button" aria-label={historyCollapsed ? "展开对话列表" : "收起对话列表"} aria-expanded={!historyCollapsed} aria-controls="conversation-history" onClick={() => setHistoryCollapsed((value) => !value)} type="button"><Icon name="panel" /></button></header>
+      <header className="learning-heading study-heading"><h1>学习空间</h1>{!firstUse ? <button className="icon-button" aria-label={historyCollapsed ? "展开对话列表" : "收起对话列表"} aria-expanded={!historyCollapsed} aria-controls="conversation-history" onClick={() => setHistoryCollapsed((value) => !value)} type="button"><Icon name="panel" /></button> : null}</header>
       {createConversationMutation.error ? <p role="alert">创建失败，请重试。<button className="button button--secondary" type="button" onClick={openCreate}>重试新建</button></p> : null}
       {error ? <ErrorState message={error.message} onRetry={() => { void refreshDocuments(); refreshCollections(); refreshConversations(); if (conversationId) void detail.refetch(); }} /> : null}
-      <div className={`learning-grid study-layout${historyCollapsed ? " study-layout--history-collapsed" : ""}`}>
+      <div className={`learning-grid study-layout${historyCollapsed || firstUse ? " study-layout--history-collapsed" : ""}`}>
         <div className="learning-content">
           {conversationId ? <section className="learning-card agent-conversation" aria-label="当前对话">
             {detail.isPending ? <p role="status">正在打开对话…</p> : null}
@@ -174,7 +178,7 @@ export function StudyPage() {
               <div className="conversation-heading"><h2>{detail.data.title}</h2>
               <p className="learning-scope">{detail.data.scope.length ? `${detail.data.scope.length} 份资料` : "选择资料后开始"}</p>
               <details className="agent-scope" open={detail.data.scope.length === 0 ? true : undefined}><summary>{detail.data.scope.length ? "资料范围" : "选择资料"}</summary>
-                <ScopePicker collections={collections.data ?? []} documents={documents} label="资料范围" onChange={setActiveScope} value={activeScope} />
+                <ScopePicker collections={collections.data ?? []} documents={documents} hasMore={Boolean(nextCursor)} label="资料范围" loading={documentsLoading} onChange={setActiveScope} selectedLabels={detail.data.scope.map((item) => ({ id: item.document_id, filename: item.filename }))} value={activeScope} />
                 {nextCursor ? <button className="button button--secondary" onClick={() => void loadMore()} type="button">加载更多资料</button> : null}
                 {switchScope.error ? <p role="alert">{switchScope.error.message}，当前范围未改变，可重试保存。</p> : null}
                 <button className="button button--secondary" disabled={switchScope.isPending} onClick={() => switchScope.mutate()} type="button">保存新范围</button>
@@ -219,9 +223,17 @@ export function StudyPage() {
                   <button className="button button--primary" disabled={!canSend} type="submit">{ask.isPending ? "正在发送…" : "发送"}</button></div>
               </form>
             </> : null}
-          </section> : <section className="workspace-empty learning-card"><h2>今天想学些什么？</h2><button className="button button--primary" disabled={createConversationMutation.isPending} onClick={openCreate} type="button">开始新对话</button></section>}
+          </section> : <section className="workspace-empty learning-card">
+            {documentsLoading || collections.isPending ? <p role="status">正在读取可用资料…</p> : hasAvailableSource ? <>
+              <h2>今天想学些什么？</h2><button className="button button--primary" disabled={createConversationMutation.isPending} onClick={openCreate} type="button">开始新对话</button>
+            </> : <>
+              <h2>{documents.length ? processingDocuments ? "资料正在处理" : "资料暂不可用" : "先上传一份 PDF"}</h2>
+              <p>{documents.length ? processingDocuments ? "处理完成后即可开始提问和练习。" : "请查看失败原因并重新处理资料。" : "上传后即可预览，处理完成后可以提问和生成练习。"}</p>
+              <Link className="button button--primary" to={documents.length ? "/" : "/#upload-materials"}>{documents.length ? "查看资料状态" : "前往资料库上传 PDF"}</Link>
+            </>}
+          </section>}
         </div>
-        <aside className="learning-sidebar" id="conversation-history" aria-label="集合与对话">
+        {!firstUse ? <aside className="learning-sidebar" id="conversation-history" aria-label="集合与对话">
           <ConversationSidebar conversations={conversations.data?.pages.flat() ?? []} currentId={conversationId} loading={conversations.isPending} hasMore={conversations.hasNextPage} loadingMore={conversations.isFetchingNextPage} onLoadMore={() => void conversations.fetchNextPage()} creating={createConversationMutation.isPending} onNew={openCreate} onDeleted={(id) => { if (id === conversationId) navigate("/study"); }} />
           <details className="learning-card collection-management"><summary>资料集合</summary>
             <form onSubmit={(event) => { event.preventDefault(); if (collectionName.trim()) createCollectionMutation.mutate(); }}>
@@ -234,7 +246,7 @@ export function StudyPage() {
             {collections.data?.length === 0 ? <p>还没有集合。创建后可将资料加入其中。</p> : null}
             {collections.data?.map((collection) => <CollectionRow key={collection.id} collection={collection} documents={documents} refresh={refreshCollections} />)}
           </details>
-        </aside>
+        </aside> : null}
       </div>
     </main>
   </div>;
