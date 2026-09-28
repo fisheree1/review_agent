@@ -21,6 +21,7 @@ test("switch document scope, rate a cited answer, and complete an Agent Quiz", a
   let attemptStatus = "in_progress";
   let response: string | null = null;
 
+  await page.route("**/api/v1/conversation-groups", (route) => route.fulfill({ json: [] }));
   await page.route("**/api/v1/auth/me", (route) => route.fulfill({ json: {
     user_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
     workspace_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
@@ -91,15 +92,16 @@ test("switch document scope, rate a cited answer, and complete an Agent Quiz", a
   });
 
   await page.goto("/study");
-  await page.getByLabel("对话标题").fill("Course review");
-  await page.getByRole("group", { name: "选择资料范围" }).getByLabel("stats.pdf").check();
-  await page.getByRole("group", { name: "选择资料范围" }).getByLabel("classes.pdf").check();
-  await page.getByRole("button", { name: "创建对话" }).click();
-  await expect(page.getByText("当前范围：stats.pdf、classes.pdf")).toBeVisible();
-  await page.getByText("调整资料范围", { exact: true }).click();
-  await page.getByRole("group", { name: "切换后续提问范围" }).getByLabel("stats.pdf").uncheck();
+  await page.getByRole("button", { name: "新建对话", exact: true }).click();
+  const selectedScope = page.getByRole("group", { name: "资料范围", exact: true });
+  await selectedScope.getByLabel("stats.pdf").check();
+  await selectedScope.getByLabel("classes.pdf").check();
   await page.getByRole("button", { name: "保存新范围" }).click();
-  await expect(page.getByText("当前范围：classes.pdf")).toBeVisible();
+  await expect(page.getByText("2 份资料", { exact: true })).toBeVisible();
+  await page.getByText("资料范围", { exact: true }).first().click();
+  await page.getByRole("group", { name: "资料范围", exact: true }).getByLabel("stats.pdf").uncheck();
+  await page.getByRole("button", { name: "保存新范围" }).click();
+  await expect(page.getByText("1 份资料", { exact: true })).toBeVisible();
   await page.getByLabel("发送任务或问题").fill("Why use the median?");
   await page.getByRole("button", { name: "发送", exact: true }).click();
   await expect(page.getByText("A class initializes an object.")).toBeVisible();
@@ -109,9 +111,11 @@ test("switch document scope, rate a cited answer, and complete an Agent Quiz", a
   await page.goto("/quizzes");
   await page.getByLabel("标题", { exact: true }).fill("Statistics check");
   await page.getByRole("group", { name: "出题资料范围" }).getByLabel("stats.pdf").check();
-  await expect(page.getByLabel("出题方式")).toHaveValue("standard");
+  await expect(page.locator('input[name="quiz-generation-mode"]')).toHaveValue("standard");
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.getByLabel("出题方式").selectOption("agent");
+  await page.getByText("更多设置", { exact: true }).click();
+  await page.getByRole("button", { name: /出题方式/ }).click();
+  await page.getByRole("menuitemradio", { name: "自主规划出题（实验）" }).click();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await page.getByRole("button", { name: /生成 5 题/ }).focus();
   await page.keyboard.press("Enter");

@@ -15,6 +15,7 @@ from app.core.models import Base
 from app.documents.infrastructure import models as document_models
 from app.jobs import models as job_models
 from app.learning import models as learning_models
+from app.learning import run_models
 from app.rag import models as rag_models
 
 config = context.config
@@ -26,6 +27,7 @@ assert document_models.WorkspaceModel.__table__.schema == APPLICATION_SCHEMA
 assert job_models.WorkerHeartbeatModel.__table__.schema == APPLICATION_SCHEMA
 assert rag_models.DocumentIndex.__table__.schema == APPLICATION_SCHEMA
 assert learning_models.Quiz.__table__.schema == APPLICATION_SCHEMA
+assert run_models.AgentRun.__table__.schema == APPLICATION_SCHEMA
 assert auth_models.AuthSession.__table__.schema == "review_agent_auth"
 
 

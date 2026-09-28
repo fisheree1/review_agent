@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, Header, Query, Response, UploadFile, status
+from fastapi.responses import FileResponse
+from starlette.background import BackgroundTask
 
 from app.core.auth import Principal, get_current_principal
 from app.core.config import Settings, get_settings
@@ -12,6 +14,7 @@ from app.core.database import async_session_factory
 from app.core.rate_limit import RedisRateLimiter, enforce_rate_limit, get_rate_limiter
 from app.documents.application.ports import DocumentStorage
 from app.documents.application.service import DocumentService
+from app.documents.domain.entities import DocumentListFilters, DocumentStatus
 from app.documents.infrastructure.repository import SqlAlchemyDocumentsUnitOfWork
 from app.documents.infrastructure.storage import MinioDocumentStorage
 from app.documents.schemas import (
@@ -58,11 +61,27 @@ async def list_documents(
     service: Annotated[DocumentService, Depends(get_document_service)],
     limit: Annotated[int, Query(ge=1, le=100)] = 30,
     cursor: Annotated[str | None, Query(max_length=512)] = None,
+    search: Annotated[str, Query(max_length=160)] = "",
+    state: Annotated[
+        Literal["ready", "processing", "failed", "deleting"] | None, Query(alias="status")
+    ] = None,
+    sort: Literal["newest", "oldest"] = "newest",
+    collection_id: UUID | None = None,
 ) -> DocumentListResponse:
     result = await service.list(
         workspace_public_id=principal.workspace_public_id,
         limit=limit,
         cursor=cursor,
+        filters=DocumentListFilters(
+            search=search.strip(),
+            statuses=(DocumentStatus.UPLOADED, DocumentStatus.QUEUED, DocumentStatus.PARSING)
+            if state == "processing"
+            else (DocumentStatus(state),)
+            if state
+            else (),
+            oldest_first=sort == "oldest",
+            collection_public_id=collection_id,
+        ),
     )
     return DocumentListResponse(
         items=[DocumentResponse.from_entity(document) for document in result.items],
@@ -106,6 +125,29 @@ async def get_document(
         document_public_id=document_id,
     )
     return DocumentResponse.from_entity(document)
+
+
+@router.get("/{document_id}/original", response_class=FileResponse)
+async def get_original_pdf(
+    document_id: UUID,
+    principal: Annotated[Principal, Depends(get_current_principal)],
+    service: Annotated[DocumentService, Depends(get_document_service)],
+) -> FileResponse:
+    """Return an authorized PDF source; DOCX and PPTX have no original preview."""
+    path = await service.pdf_source(
+        workspace_public_id=principal.workspace_public_id,
+        document_public_id=document_id,
+    )
+    return FileResponse(
+        path,
+        media_type="application/pdf",
+        headers={
+            "Cache-Control": "private, no-store",
+            "Content-Disposition": 'inline; filename="document.pdf"',
+            "X-Content-Type-Options": "nosniff",
+        },
+        background=BackgroundTask(path.unlink, missing_ok=True),
+    )
 
 
 @router.get("/{document_id}/pages", response_model=DocumentPagesResponse)

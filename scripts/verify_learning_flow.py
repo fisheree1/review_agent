@@ -56,6 +56,15 @@ class FakeModels:
     def __init__(self) -> None:
         self.answer_document_ids: set[UUID] = set()
 
+    async def grade_short_with_usage(
+        self, items: list[dict[str, Any]]
+    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        return await self.grade_short(items), {
+            "model": "fake",
+            "prompt_tokens": 20,
+            "completion_tokens": 5,
+        }
+
     async def plan_task(
         self, request: str, *, history: list[dict[str, str]], review_available: bool
     ) -> tuple[dict[str, Any], dict[str, Any]]:

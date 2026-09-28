@@ -5,6 +5,8 @@ WORKDIR /app/web
 COPY web/package.json web/pnpm-lock.yaml ./
 RUN pnpm install --frozen-lockfile
 COPY web/ ./
+ARG WEB_BASE_PATH=/
+ENV WEB_BASE_PATH=$WEB_BASE_PATH
 RUN pnpm run build
 
 FROM caddy:2.10.2-alpine

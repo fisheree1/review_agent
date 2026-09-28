@@ -12,9 +12,11 @@ test("complete Quiz, review mistakes and draft weak practice within the conversa
   let status = "in_progress";
   let response: string | null = null;
   let started = false;
+  let revision = 0;
   const quiz = { id: quizId, title: "统计练习", scope, status: "ready", question_count: 1,
     config: { type_counts: { single: 1, multiple: 0, true_false: 0, short: 0 }, difficulty: "medium", language: "zh", topic: "统计", generation_mode: "agent" } };
 
+  await page.route("**/api/v1/conversation-groups", (route) => route.fulfill({ json: [] }));
   await page.route("**/api/v1/auth/me", (route) => route.fulfill({ json: {
     user_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", workspace_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
     email: "learner@example.test", csrf_token: "csrf-e2e",
@@ -50,12 +52,13 @@ test("complete Quiz, review mistakes and draft weak practice within the conversa
       else data = started ? [{ id: attemptId, status }] : [];
     } else if (path.includes("/answers/")) {
       response = (route.request().postDataJSON() as { response: string }).response;
-      data = { question_id: questionId, response };
+      revision += 1;
+      data = { question_id: questionId, response, revision };
     } else if (path.endsWith(":submit")) {
       status = "submitted"; data = { id: attemptId, status, score: 0, weak_topics: ["统计"] };
     } else if (path.endsWith(attemptId)) {
       const complete = status === "submitted";
-      data = { id: attemptId, status, score: complete ? 0 : null, weak_topics: complete ? ["统计"] : null,
+      data = { id: attemptId, status, revision, score: complete ? 0 : null, weak_topics: complete ? ["统计"] : null,
         questions: [{ id: questionId, ordinal: 1, kind: "single", difficulty: "medium", topic: "统计",
           stem: "哪个统计量不易受极端值影响？", options: ["中位数", "均值", "众数"], response,
           answer: complete ? "中位数" : null, earned: complete ? 0 : null,
@@ -68,7 +71,11 @@ test("complete Quiz, review mistakes and draft weak practice within the conversa
   });
 
   await page.goto(`/study/${conversationId}`);
-  await expect(page.getByText("当前范围：stats.pdf")).toBeVisible();
+  await expect(page.getByText("1 份资料")).toBeVisible();
+  const scopeDetails = page.locator("details.agent-scope");
+  await scopeDetails.locator("summary").click();
+  await expect(scopeDetails.getByLabel("stats.pdf")).toBeChecked();
+  await scopeDetails.locator("summary").click();
   const composer = page.getByLabel("发送任务或问题");
   await composer.fill("生成一道关于统计的单选题。");
   await composer.press("Control+Enter");
@@ -76,7 +83,16 @@ test("complete Quiz, review mistakes and draft weak practice within the conversa
   await expect(practice).toBeVisible();
   await practice.getByRole("button", { name: "在对话中作答" }).click();
   await expect(practice.getByText("参考答案：中位数")).not.toBeVisible();
+  await practice.getByRole("button", { name: "第 1 题 · 未答" }).focus();
+  await page.keyboard.press("Enter");
+  await expect(practice.locator(".quiz-question")).toBeFocused();
+  await practice.getByRole("button", { name: "只看未答题" }).click();
   await practice.getByRole("radio", { name: "均值", exact: true }).check();
+  await expect(practice.getByRole("radio", { name: "均值", exact: true })).toBeChecked();
+  await expect(practice.getByRole("button", { name: "第 1 题 · 已答" })).toBeVisible();
+  await expect(practice.getByRole("progressbar", { name: "已作答题数" })).toHaveJSProperty("value", 1);
+  await expect.poll(() => practice.locator(".quiz-progress__bar > span").evaluate((element) =>
+    element.getBoundingClientRect().width / element.parentElement!.getBoundingClientRect().width)).toBeCloseTo(1, 2);
   await practice.getByRole("button", { name: "提交作答" }).click();
   await expect(practice.getByText("得分 0 / 100")).toBeVisible();
   await expect(practice.getByText("参考答案：中位数")).toBeVisible();

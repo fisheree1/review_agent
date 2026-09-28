@@ -9,7 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 from app.learning.domain import validate_blueprint
 from app.rag.domain import RagFailure
 
-TASK_VERSION = "conversation-tasks-v1"
+TASK_VERSION = "conversation-tasks-v2"
 
 
 class QuizTaskConfig(BaseModel):
@@ -27,16 +27,33 @@ class QuizTaskConfig(BaseModel):
 
 
 class TaskPlan(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", strict=True)
 
-    action: Literal["answer", "create_quiz", "review_mistakes", "practice_weak_topics", "clarify"]
+    action: Literal[
+        "answer", "create_quiz", "review_mistakes", "practice_weak_topics", "clarify", "study"
+    ]
     title: str | None = Field(default=None, min_length=1, max_length=160)
     config: QuizTaskConfig | None = None
     message: str | None = Field(default=None, min_length=2, max_length=600)
+    summary_request: str | None = Field(default=None, min_length=2, max_length=1200)
+    review_after_submit: bool = False
+    practice_after_review: bool = False
 
     @model_validator(mode="after")
     def validate_arguments(self) -> Self:
-        if self.action in ("create_quiz", "practice_weak_topics"):
+        if self.action != "study" and (
+            self.summary_request is not None
+            or self.review_after_submit
+            or self.practice_after_review
+        ):
+            raise ValueError("Only study workflows accept multiple steps")
+        if self.action == "study" and (
+            not self.summary_request
+            or not self.summary_request.strip()
+            or (self.practice_after_review and not self.review_after_submit)
+        ):
+            raise ValueError("Study requires a summary and consistent review steps")
+        if self.action in ("create_quiz", "practice_weak_topics", "study"):
             if (
                 self.title is None
                 or not self.title.strip()

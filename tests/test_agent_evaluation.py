@@ -2,6 +2,8 @@ import asyncio
 from typing import Any
 from uuid import NAMESPACE_URL, uuid5
 
+import pytest
+
 from app.rag.domain import Evidence
 from scripts import evaluate_agent
 from scripts.evaluate_agent import EVAL_PATH, Fixture, score_answer
@@ -39,7 +41,10 @@ def test_agent_evaluation_does_not_count_unknown_answers_as_success() -> None:
     ]
 
 
-def test_comparison_never_sends_foreign_or_deselected_fixture_text_to_models(monkeypatch) -> None:
+@pytest.mark.parametrize("engine", ["legacy", "langgraph"])
+def test_comparison_never_sends_foreign_or_deselected_fixture_text_to_models(
+    monkeypatch, engine
+) -> None:
     embedded: list[str] = []
     fixture = Fixture.model_validate(
         {
@@ -101,7 +106,7 @@ def test_comparison_never_sends_foreign_or_deselected_fixture_text_to_models(mon
             }
 
     monkeypatch.setattr(evaluate_agent, "CloudModels", Model)
-    report = asyncio.run(evaluate_agent.compare(fixture))
+    report = asyncio.run(evaluate_agent.compare(fixture, engine=engine))
     assert all(row["passed"] for row in report["results"])
     assert fixture.documents[1].text not in embedded and fixture.documents[2].text not in embedded
     assert all(document.text not in str(report) for document in fixture.documents)

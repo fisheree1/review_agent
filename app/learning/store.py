@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import and_, func, select, update
+from sqlalchemy import and_, delete, exists, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.errors import ApplicationError
@@ -22,6 +22,7 @@ from app.learning.models import (
     QuizDocument,
     QuizQuestion,
 )
+from app.learning.run_models import AgentRun, AgentStageExecution
 from app.learning.scope import (
     ScopeSnapshot,
     missing,
@@ -31,6 +32,7 @@ from app.learning.scope import (
     snapshot_ready,
     workspace_id,
 )
+from app.learning.workflow import GRAPH_VERSION
 from app.rag.domain import Evidence, RagFailure
 from app.rag.messages import FAILURES
 
@@ -41,6 +43,8 @@ def conversation_view(conversation: Conversation) -> dict[str, Any]:
     return {
         "id": str(conversation.public_id),
         "title": conversation.title,
+        "group_id": str(conversation.group_id) if conversation.group_id else None,
+        "updated_at": conversation.updated_at,
         "scope": conversation.scope,
         "created_at": conversation.created_at,
     }
@@ -93,12 +97,69 @@ def question_view(question: QuizQuestion, *, show_answer: bool) -> dict[str, Any
 class SqlLearningStore:
     """Persistence commands end their transactions before any model or embedding call."""
 
-    def __init__(self, sessions: async_sessionmaker[AsyncSession], profile: str) -> None:
+    def __init__(
+        self,
+        sessions: async_sessionmaker[AsyncSession],
+        profile: str,
+        *,
+        graph_enabled: bool = False,
+        wait_days: int = 7,
+    ) -> None:
         self.sessions = sessions
         self.profile = profile
+        self.graph_enabled = graph_enabled
+        self.wait_days = wait_days
 
     async def _workspace(self, session: AsyncSession, public_id: UUID) -> int:
         return await workspace_id(session, public_id)
+
+    async def resume_learning(self, principal: UUID) -> dict[str, Any]:
+        async with self.sessions.begin() as session:
+            workspace = await self._workspace(session, principal)
+            active = exists().where(
+                ConversationMessage.workspace_id == workspace,
+                ConversationMessage.conversation_id == Conversation.id,
+                ConversationMessage.status.in_(("queued", "processing")),
+            )
+            recent = (
+                await session.execute(
+                    select(Conversation, active.label("working"))
+                    .where(Conversation.workspace_id == workspace)
+                    .order_by(active.desc(), Conversation.updated_at.desc(), Conversation.id.desc())
+                    .limit(1)
+                )
+            ).first()
+            unfinished = (
+                await session.execute(
+                    select(QuizAttempt, Quiz)
+                    .join(Quiz, Quiz.id == QuizAttempt.quiz_id)
+                    .where(
+                        QuizAttempt.workspace_id == workspace,
+                        Quiz.workspace_id == workspace,
+                        Quiz.status == "ready",
+                        QuizAttempt.status.in_(("in_progress", "grading")),
+                    )
+                    .order_by(QuizAttempt.created_at.desc(), QuizAttempt.id.desc())
+                    .limit(1)
+                )
+            ).first()
+            return {
+                "conversation": {
+                    "id": str(recent[0].public_id),
+                    "title": recent[0].title,
+                    "working": recent[1],
+                }
+                if recent
+                else None,
+                "attempt": {
+                    "id": str(unfinished[0].public_id),
+                    "quiz_id": str(unfinished[1].public_id),
+                    "title": unfinished[1].title,
+                    "status": unfinished[0].status,
+                }
+                if unfinished
+                else None,
+            }
 
     async def list_collections(self, principal: UUID) -> list[dict[str, Any]]:
         async with self.sessions.begin() as session:
@@ -142,18 +203,36 @@ class SqlLearningStore:
             ]
 
     async def create_collection(
-        self, principal: UUID, name: str, description: str
+        self, principal: UUID, name: str, description: str, document_ids: list[UUID] | None = None
     ) -> dict[str, Any]:
         async with self.sessions.begin() as session:
             workspace = await self._workspace(session, principal)
+            wanted = document_ids or []
+            documents = (
+                await session.scalars(
+                    select(DocumentModel).where(
+                        DocumentModel.workspace_id == workspace,
+                        DocumentModel.public_id.in_(wanted),
+                        DocumentModel.deleted_at.is_(None),
+                    )
+                )
+            ).all()
+            if {document.public_id for document in documents} != set(wanted):
+                raise missing()
             item = Collection(workspace_id=workspace, name=name, description=description)
             session.add(item)
             await session.flush()
+            session.add_all(
+                CollectionDocument(
+                    workspace_id=workspace, collection_id=item.id, document_id=document.id
+                )
+                for document in documents
+            )
             return {
                 "id": str(item.public_id),
                 "name": item.name,
                 "description": item.description,
-                "document_ids": [],
+                "document_ids": [str(document.public_id) for document in documents],
             }
 
     async def _collection(
@@ -243,11 +322,46 @@ class SqlLearningStore:
         title: str,
         documents: list[UUID],
         collections: list[UUID],
+        key: str | None = None,
     ) -> dict[str, Any]:
+        create_request = {
+            "title": title,
+            "document_ids": sorted(str(value) for value in documents),
+            "collection_ids": sorted(str(value) for value in collections),
+        }
         async with self.sessions.begin() as session:
             workspace = await self._workspace(session, principal)
-            scope = await resolve_scope(session, workspace, documents, collections, self.profile)
-            item = Conversation(workspace_id=workspace, title=title, scope=scope)
+            if key:
+                await session.scalar(
+                    select(WorkspaceModel.id)
+                    .where(WorkspaceModel.id == workspace)
+                    .with_for_update()
+                )
+                previous = await session.scalar(
+                    select(Conversation).where(
+                        Conversation.workspace_id == workspace, Conversation.create_key == key
+                    )
+                )
+                if previous is not None:
+                    if previous.create_request != create_request:
+                        raise ApplicationError(
+                            code="IDEMPOTENCY_CONFLICT",
+                            message="此请求标识已用于其他新建对话请求",
+                            status_code=409,
+                        )
+                    return conversation_view(previous)
+            scope = (
+                await resolve_scope(session, workspace, documents, collections, self.profile)
+                if documents or collections
+                else []
+            )
+            item = Conversation(
+                workspace_id=workspace,
+                title=title,
+                scope=scope,
+                create_key=key,
+                create_request=create_request if key else None,
+            )
             session.add(item)
             await session.flush()
             session.add_all(
@@ -260,15 +374,26 @@ class SqlLearningStore:
             )
             return conversation_view(item)
 
-    async def list_conversations(self, principal: UUID) -> list[dict[str, Any]]:
+    async def list_conversations(
+        self, principal: UUID, before: UUID | None = None
+    ) -> list[dict[str, Any]]:
         async with self.sessions.begin() as session:
             workspace = await self._workspace(session, principal)
+            query = select(Conversation).where(Conversation.workspace_id == workspace)
+            if before:
+                cursor = await self._conversation(session, workspace, before)
+                query = query.where(
+                    or_(
+                        Conversation.updated_at < cursor.updated_at,
+                        and_(
+                            Conversation.updated_at == cursor.updated_at,
+                            Conversation.id < cursor.id,
+                        ),
+                    )
+                )
             items = (
                 await session.scalars(
-                    select(Conversation)
-                    .where(Conversation.workspace_id == workspace)
-                    .order_by(Conversation.updated_at.desc(), Conversation.id.desc())
-                    .limit(50)
+                    query.order_by(Conversation.updated_at.desc(), Conversation.id.desc()).limit(50)
                 )
             ).all()
             return [conversation_view(item) for item in items]
@@ -297,10 +422,22 @@ class SqlLearningStore:
                 )
             ).all()
             ratings = {entry.message_id: entry.rating for entry in feedback}
+            runs = (
+                await session.scalars(
+                    select(AgentRun).where(
+                        AgentRun.workspace_id == workspace, AgentRun.conversation_id == item.id
+                    )
+                )
+            ).all()
+            run_ids = {run.message_id: str(run.public_id) for run in runs}
             return {
                 **conversation_view(item),
                 "messages": [
-                    message_view(message, ratings.get(message.id)) for message in messages
+                    {
+                        **message_view(message, ratings.get(message.id)),
+                        "run_id": run_ids.get(message.id),
+                    }
+                    for message in messages
                 ],
             }
 
@@ -353,8 +490,15 @@ class SqlLearningStore:
                     raise ApplicationError(
                         code="IDEMPOTENCY_CONFLICT", message="请求标识已被使用", status_code=409
                     )
-                return message_view(existing)
-            if not await snapshot_ready(session, workspace, item.scope, self.profile):
+                run_id = await session.scalar(
+                    select(AgentRun.public_id).where(
+                        AgentRun.workspace_id == workspace, AgentRun.message_id == existing.id
+                    )
+                )
+                return {**message_view(existing), "run_id": str(run_id) if run_id else None}
+            if not item.scope or not await snapshot_ready(
+                session, workspace, item.scope, self.profile
+            ):
                 raise ApplicationError(
                     code="SCOPE_NOT_READY",
                     message="资料范围已变化，请重新选择资料",
@@ -380,6 +524,16 @@ class SqlLearningStore:
                 raise ApplicationError(
                     code="QUESTION_LIMIT", message="提问过于频繁，请稍后重试", status_code=429
                 )
+            if item.title == "新对话" and not await session.scalar(
+                select(ConversationMessage.id)
+                .where(
+                    ConversationMessage.workspace_id == workspace,
+                    ConversationMessage.conversation_id == item.id,
+                )
+                .limit(1)
+            ):
+                item.title = question[:40]
+            item.updated_at = datetime.now(UTC)
             message = ConversationMessage(
                 workspace_id=workspace,
                 conversation_id=item.id,
@@ -391,6 +545,19 @@ class SqlLearningStore:
             )
             session.add(message)
             await session.flush()
+            if self.graph_enabled:
+                run = AgentRun(
+                    workspace_id=workspace,
+                    conversation_id=item.id,
+                    message_id=message.id,
+                    graph_version=GRAPH_VERSION,
+                    profile=self.profile,
+                    scope=item.scope,
+                    expires_at=datetime.now(UTC) + timedelta(days=self.wait_days),
+                )
+                session.add(run)
+                await session.flush()
+                return {**message_view(message), "run_id": str(run.public_id)}
             return message_view(message)
 
     async def cancel_message(
@@ -399,6 +566,22 @@ class SqlLearningStore:
         async with self.sessions.begin() as session:
             workspace = await self._workspace(session, principal)
             item = await self._conversation(session, workspace, conversation_id)
+            bound = await session.scalar(
+                select(AgentRun)
+                .join(
+                    ConversationMessage,
+                    and_(
+                        ConversationMessage.id == AgentRun.message_id,
+                        ConversationMessage.workspace_id == AgentRun.workspace_id,
+                    ),
+                )
+                .where(
+                    AgentRun.workspace_id == workspace,
+                    AgentRun.conversation_id == item.id,
+                    ConversationMessage.public_id == message_id,
+                )
+                .with_for_update(of=AgentRun)
+            )
             message = await session.scalar(
                 select(ConversationMessage)
                 .where(
@@ -414,6 +597,43 @@ class SqlLearningStore:
                 message.status = "cancelled"
                 message.fence = None
                 message.lease_until = None
+            await session.execute(
+                update(AgentRun)
+                .where(
+                    AgentRun.workspace_id == workspace,
+                    AgentRun.message_id == message.id,
+                    AgentRun.status.not_in(["completed", "failed", "cancelled", "expired"]),
+                )
+                .values(
+                    status="cancelled",
+                    fence=None,
+                    lease_until=None,
+                    quiz_reserved=False,
+                    revision=AgentRun.revision + 1,
+                )
+            )
+            if bound is not None:
+                await session.execute(
+                    delete(AgentStageExecution).where(
+                        AgentStageExecution.workspace_id == workspace,
+                        AgentStageExecution.run_id == bound.id,
+                    )
+                )
+                if bound.stage == "grade":
+                    await session.execute(
+                        update(QuizAttempt)
+                        .where(
+                            QuizAttempt.workspace_id == workspace,
+                            QuizAttempt.id == bound.attempt_id,
+                            QuizAttempt.status == "grading",
+                        )
+                        .values(
+                            status="failed",
+                            failure_code="AGENT_RUN_INACTIVE",
+                            fence=None,
+                            lease_until=None,
+                        )
+                    )
             return message_view(message)
 
     async def feedback(
@@ -476,6 +696,7 @@ class SqlLearningStore:
                 .where(
                     ConversationMessage.status == "processing",
                     ConversationMessage.lease_until < now,
+                    ~exists().where(AgentRun.message_id == ConversationMessage.id),
                 )
                 .values(status="failed", fence=None, failure_code="WORKER_INTERRUPTED")
             )
@@ -484,6 +705,7 @@ class SqlLearningStore:
                 .where(
                     ConversationMessage.status == "queued",
                     ConversationMessage.profile == self.profile,
+                    ~exists().where(AgentRun.message_id == ConversationMessage.id),
                 )
                 .order_by(ConversationMessage.created_at)
                 .with_for_update(skip_locked=True)
@@ -591,7 +813,12 @@ class SqlLearningStore:
                 ConversationMessage.task_result["kind"].astext == "quiz",
             )
         )
-        if (quizzes or 0) + (reserved or 0) >= 20:
+        graph_reserved = await session.scalar(
+            select(func.count())
+            .select_from(AgentRun)
+            .where(AgentRun.workspace_id == workspace, AgentRun.quiz_reserved.is_(True))
+        )
+        if (quizzes or 0) + (reserved or 0) + (graph_reserved or 0) >= 20:
             raise ApplicationError(
                 code="QUIZ_LIMIT", message="出题过于频繁，请稍后重试", status_code=429
             )
@@ -1042,7 +1269,13 @@ class SqlLearningStore:
         return attempt
 
     async def save_answer(
-        self, principal: UUID, quiz_id: UUID, attempt_id: UUID, question_id: UUID, response: Any
+        self,
+        principal: UUID,
+        quiz_id: UUID,
+        attempt_id: UUID,
+        question_id: UUID,
+        response: Any,
+        expected_revision: int | None = None,
     ) -> dict[str, Any]:
         async with self.sessions.begin() as session:
             workspace = await self._workspace(session, principal)
@@ -1067,7 +1300,6 @@ class SqlLearningStore:
                 )
             if question.kind == "multiple" and (
                 not isinstance(response, list)
-                or not response
                 or len(response) != len(set(map(str, response)))
                 or any(
                     not isinstance(value, str) or value not in question.options
@@ -1094,6 +1326,19 @@ class SqlLearningStore:
                     QuizAnswer.question_id == question.id,
                 )
             )
+            if expected_revision is not None and expected_revision != attempt.revision:
+                # A lost acknowledgement may replay an already saved value without overwriting.
+                if answer is not None and answer.response == response:
+                    return {
+                        "question_id": str(question.public_id),
+                        "response": response,
+                        "revision": attempt.revision,
+                    }
+                raise ApplicationError(
+                    code="ANSWER_REVISION_CONFLICT",
+                    message="作答已在其他页面更新，请重新打开",
+                    status_code=409,
+                )
             if answer is None:
                 answer = QuizAnswer(
                     workspace_id=workspace,
@@ -1104,7 +1349,12 @@ class SqlLearningStore:
                 session.add(answer)
             else:
                 answer.response = response
-            return {"question_id": str(question.public_id), "response": response}
+            attempt.revision += 1
+            return {
+                "question_id": str(question.public_id),
+                "response": response,
+                "revision": attempt.revision,
+            }
 
     async def _finalize_attempt(self, session: AsyncSession, attempt: QuizAttempt) -> None:
         questions = (
@@ -1137,6 +1387,23 @@ class SqlLearningStore:
         attempt.submitted_at = datetime.now(UTC)
         attempt.fence = None
         attempt.lease_until = None
+        # Durable continuation is committed with scores; polling/redelivery cannot lose this event.
+        await session.execute(
+            update(AgentRun)
+            .where(
+                AgentRun.workspace_id == attempt.workspace_id,
+                AgentRun.attempt_id == attempt.id,
+                AgentRun.status.in_(["waiting_input", "waiting_result", "running"]),
+                AgentRun.stage.in_(["wait", "grade"]),
+            )
+            .values(
+                stage="review",
+                status="queued",
+                fence=None,
+                lease_until=None,
+                revision=AgentRun.revision + 1,
+            )
+        )
 
     async def submit_attempt(
         self, principal: UUID, quiz_id: UUID, attempt_id: UUID
@@ -1146,6 +1413,18 @@ class SqlLearningStore:
         async with self.sessions.begin() as session:
             workspace = await self._workspace(session, principal)
             quiz = await self._quiz(session, workspace, quiz_id)
+            await session.scalar(
+                select(AgentRun)
+                .join(
+                    QuizAttempt,
+                    and_(
+                        QuizAttempt.id == AgentRun.attempt_id,
+                        QuizAttempt.workspace_id == AgentRun.workspace_id,
+                    ),
+                )
+                .where(AgentRun.workspace_id == workspace, QuizAttempt.public_id == attempt_id)
+                .with_for_update(of=AgentRun)
+            )
             attempt = await self._attempt(session, workspace, quiz, attempt_id, lock=True)
             if attempt.status != "in_progress":
                 return {
@@ -1187,6 +1466,16 @@ class SqlLearningStore:
                     answer.grading_method = "automatic"
             if needs_grading:
                 attempt.status = "grading"
+                await session.execute(
+                    update(AgentRun)
+                    .where(
+                        AgentRun.workspace_id == workspace,
+                        AgentRun.attempt_id == attempt.id,
+                        AgentRun.status == "waiting_input",
+                        AgentRun.stage == "wait",
+                    )
+                    .values(stage="grade", status="queued", revision=AgentRun.revision + 1)
+                )
             else:
                 await session.flush()
                 await self._finalize_attempt(session, attempt)
@@ -1204,6 +1493,16 @@ class SqlLearningStore:
             workspace = await self._workspace(session, principal)
             quiz = await self._quiz(session, workspace, quiz_id)
             attempt = await self._attempt(session, workspace, quiz, attempt_id, lock=True)
+            if attempt.status == "failed" and await session.scalar(
+                select(AgentRun.id).where(
+                    AgentRun.workspace_id == workspace, AgentRun.attempt_id == attempt.id
+                )
+            ):
+                raise ApplicationError(
+                    code="AGENT_RUN_INACTIVE",
+                    message="关联任务已停止，请开始新的作答",
+                    status_code=409,
+                )
             if attempt.status == "failed" and attempt.failure_code in {
                 "PROVIDER_TIMEOUT",
                 "PROVIDER_LIMIT",
@@ -1257,6 +1556,7 @@ class SqlLearningStore:
                 "status": attempt.status,
                 "score": attempt.score,
                 "weak_topics": attempt.weak_topics,
+                "revision": attempt.revision,
                 "failure_code": attempt.failure_code,
                 "questions": [
                     {
@@ -1309,6 +1609,12 @@ class SqlLearningStore:
                     QuizAttempt.status == "grading",
                     QuizAttempt.fence.is_not(None),
                     QuizAttempt.lease_until < now,
+                    ~exists().where(
+                        AgentRun.attempt_id == QuizAttempt.id,
+                        AgentRun.status.not_in(
+                            ["completed", "failed", "cancelled", "expired", "blocked"]
+                        ),
+                    ),
                 )
                 .values(
                     status="failed",
@@ -1322,6 +1628,12 @@ class SqlLearningStore:
                 .where(
                     QuizAttempt.status == "grading",
                     QuizAttempt.fence.is_(None),
+                    ~exists().where(
+                        AgentRun.attempt_id == QuizAttempt.id,
+                        AgentRun.status.not_in(
+                            ["completed", "failed", "cancelled", "expired", "blocked"]
+                        ),
+                    ),
                 )
                 .order_by(QuizAttempt.created_at)
                 .with_for_update(skip_locked=True)
@@ -1380,6 +1692,24 @@ class SqlLearningStore:
         self, public_id: UUID, fence: UUID, grades: list[dict[str, Any]]
     ) -> None:
         async with self.sessions.begin() as session:
+            bound = await session.scalar(
+                select(AgentRun)
+                .join(
+                    QuizAttempt,
+                    and_(
+                        QuizAttempt.id == AgentRun.attempt_id,
+                        QuizAttempt.workspace_id == AgentRun.workspace_id,
+                    ),
+                )
+                .where(QuizAttempt.public_id == public_id)
+                .with_for_update(of=AgentRun)
+            )
+            if (
+                bound is not None
+                and bound.status not in {"completed", "failed", "cancelled", "expired", "blocked"}
+                and (bound.status != "running" or bound.fence != fence)
+            ):
+                return
             attempt = await session.scalar(
                 select(QuizAttempt)
                 .where(
@@ -1420,6 +1750,14 @@ class SqlLearningStore:
                 answer.grading_method = "model_hint"
             await session.flush()
             await self._finalize_attempt(session, attempt)
+            if bound is not None:
+                await session.execute(
+                    update(AgentStageExecution)
+                    .where(
+                        AgentStageExecution.run_id == bound.id, AgentStageExecution.stage == "grade"
+                    )
+                    .values(status="published", result=None)
+                )
 
     async def fail_grading(self, public_id: UUID, fence: UUID, code: str) -> None:
         async with self.sessions.begin() as session:

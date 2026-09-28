@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 
 import { ApiError, uploadDocument } from "../api/documents";
-import { Icon } from "./Icon";
 
 const MAX_FILE_SIZE = 25 * 1024 * 1024;
 const MAX_BATCH_FILES = 10;
@@ -96,11 +95,10 @@ export function UploadPanel({ onUploaded }: UploadPanelProps) {
   const pendingCount = items.filter((item) => item.valid && item.status !== "completed").length;
   const completedCount = items.filter((item) => item.status === "completed").length;
   return (
-    <section aria-labelledby="upload-title" className="upload-panel">
+    <section aria-labelledby="upload-title" className="upload-panel" id="upload-materials">
       <div className="upload-panel__copy">
-        <span className="eyebrow">建立你的资料库</span>
-        <h1 id="upload-title">把学习资料放进来，安静地读完它。</h1>
-        <p>一次选择最多 10 份 PDF、DOCX 或 PPTX，每份最大 25 MB。后台会识别扫描 PDF 中的中英文，并保留来源位置。</p>
+        <h2 id="upload-title">上传资料</h2>
+        <p>PDF、DOCX、PPTX · 最多 10 份 · 每份 25 MB</p>
       </div>
       <div
         className={`drop-zone${isDragging ? " drop-zone--active" : ""}`}
@@ -112,8 +110,7 @@ export function UploadPanel({ onUploaded }: UploadPanelProps) {
           chooseFiles(event.dataTransfer.files);
         }}
       >
-        <span className="drop-zone__icon"><Icon name="upload" /></span>
-        <div><strong>拖放资料到这里</strong><span>或从电脑选择，最多 10 份</span></div>
+        <strong>拖放文件到这里</strong>
         <input
           accept="application/pdf,.pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,.docx,application/vnd.openxmlformats-officedocument.presentationml.presentation,.pptx"
           className="visually-hidden" id="document-file" disabled={isUploading} multiple
@@ -139,7 +136,7 @@ export function UploadPanel({ onUploaded }: UploadPanelProps) {
           </li>)}
         </ul> : null}
         {completedCount > 0 ? <p role="status">已提交 {completedCount} 份资料，解析会在后台继续。</p> : null}
-        {error ? <p className="field-error" role="alert"><Icon name="error" />{error}</p> : null}
+        {error ? <p className="field-error" role="alert">{error}</p> : null}
       </div>
     </section>
   );

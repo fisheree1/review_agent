@@ -223,6 +223,7 @@ async def plan_evidence(
             observations.append(
                 {
                     "tool": "search",
+                    "query": query,
                     "sources": [
                         {
                             "source_id": str(source.id),

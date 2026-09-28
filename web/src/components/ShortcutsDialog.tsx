@@ -17,12 +17,11 @@ export function ShortcutsDialog({ isOpen, onClose }: ShortcutsDialogProps) {
 
   return (
     <dialog className="shortcuts-dialog" onCancel={(event) => { event.preventDefault(); onClose(); }} onClose={onClose} ref={dialogRef}>
-      <h2>阅读快捷键</h2>
+      <h2>预览快捷键</h2>
       <p>当焦点不在输入控件时可使用：</p>
       <dl>
         <div><dt><kbd>[</kbd></dt><dd>上一页</dd></div>
         <div><dt><kbd>]</kbd></dt><dd>下一页</dd></div>
-        <div><dt><kbd>R</kbd></dt><dd>展开或收起引用面板</dd></div>
         <div><dt><kbd>?</kbd></dt><dd>打开快捷键说明</dd></div>
         <div><dt><kbd>Esc</kbd></dt><dd>关闭当前面板</dd></div>
       </dl>

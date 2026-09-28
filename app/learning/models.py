@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 from uuid import UUID, uuid4
 
 from sqlalchemy import (
     BigInteger,
     CheckConstraint,
+    Date,
     DateTime,
     ForeignKeyConstraint,
     Identity,
@@ -64,10 +65,50 @@ class CollectionDocument(Base):
     added_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class ConversationGroup(Base):
+    __tablename__ = "conversation_groups"
+    __table_args__ = (
+        UniqueConstraint("public_id", "workspace_id", name="uq_conversation_groups_scope"),
+        ForeignKeyConstraint(["workspace_id"], [f"{S}.workspaces.id"], ondelete="CASCADE"),
+        Index("ix_conversation_groups_workspace", "workspace_id", "created_at"),
+        {"schema": S},
+    )
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    public_id: Mapped[UUID] = mapped_column(unique=True, default=uuid4)
+    workspace_id: Mapped[int] = mapped_column(BigInteger)
+    name: Mapped[str] = mapped_column(String(80))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class StudyCheckin(Base):
+    __tablename__ = "study_checkins"
+    __table_args__ = (
+        UniqueConstraint("workspace_id", "user_id", "local_date", name="uq_study_checkins_day"),
+        ForeignKeyConstraint(
+            ["user_id", "workspace_id"],
+            [f"{S}.workspace_members.user_id", f"{S}.workspace_members.workspace_id"],
+            ondelete="CASCADE",
+        ),
+        {"schema": S},
+    )
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(BigInteger)
+    user_id: Mapped[int] = mapped_column(BigInteger)
+    local_date: Mapped[date] = mapped_column(Date)
+    timezone: Mapped[str] = mapped_column(String(100))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class Conversation(Base):
     __tablename__ = "conversations"
     __table_args__ = (
         UniqueConstraint("id", "workspace_id", name="uq_conversations_scope"),
+        UniqueConstraint("workspace_id", "create_key", name="uq_conversations_create_key"),
+        ForeignKeyConstraint(
+            ["group_id", "workspace_id"],
+            [f"{S}.conversation_groups.public_id", f"{S}.conversation_groups.workspace_id"],
+        ),
+        Index("ix_conversations_group", "workspace_id", "group_id"),
         ForeignKeyConstraint(["workspace_id"], [f"{S}.workspaces.id"], ondelete="CASCADE"),
         Index("ix_conversations_workspace", "workspace_id", "created_at"),
         {"schema": S},
@@ -76,6 +117,9 @@ class Conversation(Base):
     public_id: Mapped[UUID] = mapped_column(unique=True, default=uuid4)
     workspace_id: Mapped[int] = mapped_column(BigInteger)
     title: Mapped[str] = mapped_column(String(160))
+    group_id: Mapped[UUID | None]
+    create_key: Mapped[str | None] = mapped_column(String(200))
+    create_request: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     scope: Mapped[list[dict[str, Any]]] = mapped_column(JSONB)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
@@ -262,6 +306,7 @@ class QuizAttempt(Base):
     __tablename__ = "quiz_attempts"
     __table_args__ = (
         UniqueConstraint("id", "workspace_id", name="uq_quiz_attempts_scope"),
+        UniqueConstraint("id", "quiz_id", "workspace_id", name="uq_quiz_attempts_quiz_scope"),
         UniqueConstraint("workspace_id", "idempotency_key", name="uq_quiz_attempts_key"),
         ForeignKeyConstraint(
             ["quiz_id", "workspace_id"],
@@ -280,6 +325,7 @@ class QuizAttempt(Base):
     workspace_id: Mapped[int] = mapped_column(BigInteger)
     quiz_id: Mapped[int] = mapped_column(BigInteger)
     idempotency_key: Mapped[str] = mapped_column(String(200))
+    revision: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     status: Mapped[str] = mapped_column(String(20), default="in_progress")
     score: Mapped[float | None]
     weak_topics: Mapped[list[str] | None] = mapped_column(JSONB)

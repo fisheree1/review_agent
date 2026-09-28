@@ -9,14 +9,15 @@ import { StudyPage } from "./StudyPage";
 
 vi.mock("../api/learning", async (original) => ({
   ...(await original<typeof learning>()), listCollections: vi.fn(), listConversations: vi.fn(),
-  getConversation: vi.fn(), askConversation: vi.fn(), cancelConversationMessage: vi.fn(),
+  listConversationGroups: vi.fn(), getConversation: vi.fn(), askConversation: vi.fn(), cancelConversationMessage: vi.fn(),
 }));
 vi.mock("../hooks/useDocuments", () => ({ useDocuments: () => ({ documents: [], nextCursor: null }) }));
 vi.mock("../components/AppHeader", () => ({ AppHeader: () => <header>Review Agent</header> }));
 afterEach(() => { cleanup(); vi.clearAllMocks(); });
 
-function show(messages: learning.ConversationMessage[] = []) {
-  const conversation = { id: "conversation", title: "统计复习", created_at: "2026-09-26T00:00:00Z", scope: [] };
+function show(messages: learning.ConversationMessage[] = [], scoped = true) {
+  const conversation = { id: "conversation", title: "统计复习", created_at: "2026-09-26T00:00:00Z", scope: scoped ? [{ document_id: "document", version_id: 1, filename: "stats.pdf" }] : [] };
+  vi.mocked(learning.listConversationGroups).mockResolvedValue([]);
   vi.mocked(learning.listCollections).mockResolvedValue([]);
   vi.mocked(learning.listConversations).mockResolvedValue([conversation]);
   vi.mocked(learning.getConversation).mockResolvedValue({ ...conversation, messages });
@@ -56,5 +57,14 @@ test("task clarification is readable without showing answer feedback or creating
   }]);
   expect(await screen.findByText("请说明题量和复习目标。")).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "有帮助" })).not.toBeInTheDocument();
+  expect(learning.askConversation).not.toHaveBeenCalled();
+});
+
+
+test("empty conversation keeps draft but refuses sending until a source is selected", async () => {
+  const user = userEvent.setup(); show([], false);
+  await user.type(await screen.findByRole("textbox", { name: "发送任务或问题" }), "解释统计学");
+  await user.keyboard("{Control>}{Enter}{/Control}");
+  expect(screen.getByRole("button", { name: "发送" })).toBeDisabled();
   expect(learning.askConversation).not.toHaveBeenCalled();
 });

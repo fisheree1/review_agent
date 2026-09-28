@@ -17,6 +17,9 @@ from app.documents.infrastructure.repository import SqlAlchemyDocumentsUnitOfWor
 from app.documents.infrastructure.storage import MinioDocumentStorage
 from app.jobs.heartbeat import run_worker_heartbeat
 from app.learning.application import LearningProcessor
+from app.learning.infrastructure.langgraph_workflow import LangGraphStudyExecutor
+from app.learning.run_application import AgentRunProcessor
+from app.learning.run_store import SqlAgentRunStore
 from app.learning.store import SqlLearningStore
 from app.rag.application import RagProcessor
 from app.rag.providers import CloudModels
@@ -79,11 +82,16 @@ async def run_worker() -> None:
     learning = LearningProcessor(
         SqlLearningStore(async_session_factory, RagSettings().profile), models, models
     )
+    runs = AgentRunProcessor(
+        SqlAgentRunStore(learning.store), models, models, LangGraphStudyExecutor()
+    )
     try:
         while not stop_event.is_set():
             processed = await processor.process_next()
             processed = await rag.process_question() or processed
             processed = await learning.process_message() or processed
+            # Disabling new graph requests must not strand existing waiting runs.
+            processed = await runs.process_next() or processed
             processed = await learning.process_grading() or processed
             processed = await learning.process_quiz() or processed
             processed = await rag.process_index() or processed

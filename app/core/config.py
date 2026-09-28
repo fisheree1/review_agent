@@ -37,6 +37,11 @@ class EnvironmentSettings(BaseSettings):
     )
 
 
+class AgentSettings(EnvironmentSettings):
+    agent_graph_enabled: bool = True
+    agent_wait_days: int = Field(default=7, ge=1, le=30)
+
+
 class ModelSettings(EnvironmentSettings):
     deepseek_api_key: SecretStr = SecretStr("")
     dashscope_api_key: SecretStr = SecretStr("")
@@ -110,6 +115,10 @@ class Settings(DatabaseSettings):
     app_env: Literal["development", "production"] = "development"
     auth_allow_signup: bool = False
     auth_public_origin: str = "http://127.0.0.1:5173"
+    auth_cookie_path: str = Field(default="/", pattern=r"^/(?:[A-Za-z0-9_-]+/)*$")
+    auth_gateway_enabled: bool = False
+    auth_gateway_token: SecretStr = SecretStr("")
+    auth_gateway_user_id: UUID | None = None
     local_api_token: SecretStr = SecretStr("")
     local_workspace_id: UUID | None = None
     max_upload_bytes: int = Field(default=25 * 1024 * 1024, gt=0)
@@ -124,8 +133,21 @@ class Settings(DatabaseSettings):
     redis_password: SecretStr = SecretStr("")
     worker_health_stale_seconds: int = Field(default=30, gt=0)
 
+    @field_validator("auth_gateway_user_id", mode="before")
+    @classmethod
+    def empty_gateway_user_id(cls, value: str | UUID | None) -> str | UUID | None:
+        return None if value == "" else value
+
     @model_validator(mode="after")
     def validate_public_auth_origin(self) -> Self:
+        if self.auth_gateway_enabled and (
+            len(self.auth_gateway_token.get_secret_value()) < 32
+            or self.auth_gateway_user_id is None
+            or self.auth_allow_signup
+        ):
+            raise ValueError(
+                "Gateway authentication requires a strong token, one user and no signup"
+            )
         origin = urlsplit(self.auth_public_origin)
         if (
             origin.scheme not in ("http", "https")
@@ -147,7 +169,11 @@ class Settings(DatabaseSettings):
     @property
     def auth_cookie_name(self) -> str:
         if self.app_env == "production":
-            return "__Host-review_agent_session"
+            return (
+                "__Host-review_agent_session"
+                if self.auth_cookie_path == "/"
+                else "__Secure-review_agent_session"
+            )
         return "review_agent_session"
 
 

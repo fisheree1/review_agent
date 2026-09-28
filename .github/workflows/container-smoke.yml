@@ -113,7 +113,9 @@ jobs:
           docker compose exec -T api python -m scripts.verify_rag_flow
 
       - name: Verify conversation tasks, Quiz, cancellation and ownership without cloud requests
-        run: docker compose exec -T api python -m scripts.verify_learning_flow
+        run: |
+          docker compose exec -T api python -m scripts.verify_learning_flow
+          docker compose exec -T api python -m scripts.verify_agent_workflow
 
       - name: Verify prior-schema upgrade preserves learning records
         run: |
@@ -123,6 +125,15 @@ jobs:
             -c 'CREATE EXTENSION vector'
           docker compose run --rm -e POSTGRES_DB=review_agent_migration_check database-init \
             python -m scripts.verify_quiz_agent_migration --isolated
+
+      - name: Verify Agent upgrade preserves pre-existing attempts
+        run: |
+          docker compose exec -T db psql -U review_agent_admin -d review_agent -v ON_ERROR_STOP=1 \
+            -c 'CREATE DATABASE review_agent_workflow_migration_check'
+          docker compose exec -T db psql -U review_agent_admin -d review_agent_workflow_migration_check -v ON_ERROR_STOP=1 \
+            -c 'CREATE EXTENSION vector'
+          docker compose run --rm -e POSTGRES_DB=review_agent_workflow_migration_check database-init \
+            python -m scripts.verify_agent_workflow_migration --isolated
 
       - name: Show logs after failure
         if: failure()

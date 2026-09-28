@@ -1,0 +1,13 @@
+# Overlay only with compose.production.yaml. TLS remains managed by BaoTa Nginx.
+services:
+  api:
+    environment:
+      AUTH_COOKIE_PATH: /review/
+  edge:
+    build:
+      args:
+        WEB_BASE_PATH: /review/
+    ports: !override
+      - "127.0.0.1:18081:80"
+    volumes:
+      - ./deploy/Caddyfile.baota:/etc/caddy/Caddyfile:ro

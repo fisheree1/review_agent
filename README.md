@@ -1,6 +1,6 @@
 # Review Agent
 
-面向学习资料的 AI 学习平台。当前具备 React 资料库与阅读器、私有文件存储、PDF/DOCX/PPTX 后台解析、百炼 Qwen Embedding + DeepSeek 引用问答、资料集合、连续对话、回答反馈与 Quiz 作答复习。
+面向学习资料的 AI 学习平台。当前代码包含 React 资料库与阅读器、私有文件存储、PDF/DOCX/PPTX 后台解析、百炼 Qwen Embedding + DeepSeek 引用问答、资料集合、连续对话、回答反馈与 Quiz 作答复习。组合学习 Agent、对话整理和个人打卡等本地改动的部署与验收状态，请以[文档中心](./docs/README.md)为准。
 
 RAG 的配置、使用、接口、限制与验证步骤见 [可引用 RAG 实现文档](docs/rag-implementation.md)。在本地 `.env` 配置 `DASHSCOPE_API_KEY`、`DASHSCOPE_EMBEDDING_URL`、`DEEPSEEK_API_KEY` 后重新构建启动，在阅读页选择“基于此资料提问”→“准备资料问答”。真实密钥只注入 Worker，不进入浏览器。
 
@@ -10,15 +10,7 @@ RAG 的配置、使用、接口、限制与验证步骤见 [可引用 RAG 实现
 
 ## 项目文档
 
-开始开发业务功能前，请先阅读 [文档中心](./docs/README.md)：
-
-- [产品需求文档](./docs/product-requirements.md)
-- [系统架构文档](./docs/architecture.md)
-- [开发规范](./docs/development-guide.md)
-- [数据库设计](./docs/database-design.md)
-- [UI 与长时间阅读体验规范](./docs/ui-design-system.md)
-- [Git 与 GitHub 管理规范](./docs/git-github-workflow.md)
-- [单台云服务器上线与数据恢复](./docs/production-operations.md)
+从 [文档中心](./docs/README.md)按任务选择文档；接手核心流程可先看[产品需求](./docs/product-requirements.md)、[系统架构](./docs/architecture.md)和[技术难点与验证路径](./docs/technical-challenges.md)。文档中心也区分本地代码、目标设计与线上已验证版本。
 
 ## 需求梳理
 
@@ -63,11 +55,11 @@ app/
 - 独立 Worker、持久化任务租约与幂等重试。
 - PDF、DOCX、PPTX 流式上传校验、正文解析、状态查询、失败说明和删除。
 - PDF 页码、DOCX 标题路径、PPTX 幻灯片编号使用统一 citation locator。
-- React 资料库、上传进度、处理状态、按来源位置阅读和引用面板。
+- React 资料库、上传进度、处理状态、PDF 原文件预览与引用摘录；DOCX/PPTX 暂不支持前端预览。
 - 资料集合、多资料问答、范围切换、回答反馈，以及有来源校验的 Quiz 生成、评分与复习。
 - API、数据库与文档 Worker 存活/就绪健康检查。
 - 后端、前端与容器闭环自动化测试。
-- Redis 短期限流及单台云服务器生产 Compose、加密异机备份和恢复手册；真实云服务器部署仍需单独验收。
+- Redis 短期限流、单台云服务器生产 Compose 与备份恢复手册；当前站点的已部署范围和未完成的异机备份验收见[部署记录](./docs/deployment-fisher-ai.md)。
 
 ## 启动
 

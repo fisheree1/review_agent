@@ -4,9 +4,12 @@ import asyncio
 import base64
 import binascii
 import logging
+import os
 import re
+import tempfile
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 from uuid import UUID, uuid4
 
 from app.core.errors import ApplicationError
@@ -17,11 +20,16 @@ from app.documents.application.ports import (
     UnitOfWorkFactory,
     UploadSource,
 )
-from app.documents.application.upload_validation import StagedUpload, stage_document_upload
+from app.documents.application.upload_validation import (
+    PDF_MEDIA_TYPE,
+    StagedUpload,
+    stage_document_upload,
+)
 from app.documents.domain.entities import (
     Document,
     DocumentContent,
     DocumentContentLocation,
+    DocumentListFilters,
     DocumentListPosition,
     DocumentStatus,
 )
@@ -266,6 +274,42 @@ class DocumentService:
             )
         return document
 
+    async def pdf_source(self, *, workspace_public_id: UUID, document_public_id: UUID) -> Path:
+        async with self._unit_of_work_factory() as unit_of_work:
+            source = await unit_of_work.documents.get_document_source(
+                workspace_public_id=workspace_public_id,
+                document_public_id=document_public_id,
+            )
+        if source is None:
+            raise ApplicationError(
+                code="DOCUMENT_NOT_FOUND", message="没有找到该资料", status_code=404
+            )
+        if source.media_type != PDF_MEDIA_TYPE:
+            raise ApplicationError(
+                code="PDF_PREVIEW_UNSUPPORTED", message="仅 PDF 支持原文件预览", status_code=415
+            )
+        if source.status in {DocumentStatus.DELETING, DocumentStatus.DELETED}:
+            raise ApplicationError(
+                code="DOCUMENT_NOT_READY", message="资料正在删除，无法预览", status_code=409
+            )
+
+        descriptor, filename = tempfile.mkstemp(prefix="review-agent-preview-", suffix=".pdf")
+        os.close(descriptor)
+        path = Path(filename)
+        try:
+            await self._storage.download(object_key=source.object_key, destination_path=path)
+        except StorageOperationError as exc:
+            await asyncio.to_thread(path.unlink, missing_ok=True)
+            raise ApplicationError(
+                code="STORAGE_UNAVAILABLE",
+                message="原文件暂时无法打开，请稍后重试",
+                status_code=503,
+            ) from exc
+        except BaseException:
+            await asyncio.to_thread(path.unlink, missing_ok=True)
+            raise
+        return path
+
     @staticmethod
     def _decode_cursor(cursor: str | None) -> DocumentListPosition | None:
         if cursor is None:
@@ -299,12 +343,14 @@ class DocumentService:
         workspace_public_id: UUID,
         limit: int,
         cursor: str | None,
+        filters: DocumentListFilters = DocumentListFilters(),
     ) -> DocumentListResult:
         async with self._unit_of_work_factory() as unit_of_work:
             page = await unit_of_work.documents.list_documents(
                 workspace_public_id=workspace_public_id,
                 limit=limit,
                 after=self._decode_cursor(cursor),
+                filters=filters,
             )
         return DocumentListResult(
             items=page.items,

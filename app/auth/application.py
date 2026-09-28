@@ -77,6 +77,22 @@ class AuthService:
             return None
         return await self.store.lookup_session(digest)
 
+    async def trusted_gateway_session(self, user_id: UUID) -> IssuedSession:
+        """Issue a session after the transport validates a trusted authentication gateway."""
+        account = await self.store.account_for_user(user_id)
+        if account is None or account.status != "active":
+            raise ApplicationError(
+                code="AUTHENTICATION_REQUIRED", message="门户账号不可用", status_code=401
+            )
+        token = secrets.token_urlsafe(32)
+        identity = await self.store.create_session(
+            account.id,
+            session_digest(token),
+            secrets.token_urlsafe(32),
+            datetime.now(UTC) + timedelta(hours=24),
+        )
+        return IssuedSession(token, identity)
+
     async def logout(self, token: str) -> None:
         if token:
             try:

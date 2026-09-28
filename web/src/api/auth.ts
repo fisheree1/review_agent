@@ -1,4 +1,4 @@
-import { apiFetch, setCsrfToken } from "./client";
+import { apiFetch, apiUrl, setCsrfToken } from "./client";
 import { parseResponse } from "./documents";
 
 export interface AuthIdentity {
@@ -6,10 +6,11 @@ export interface AuthIdentity {
   workspace_id: string;
   email: string;
   csrf_token: string;
+  login_mode?: "password" | "portal";
 }
 
-export async function getAuthConfig(): Promise<{ signup_enabled: boolean }> {
-  return parseResponse(await fetch("/api/v1/auth/config", { credentials: "same-origin" }));
+export async function getAuthConfig(): Promise<{ signup_enabled: boolean; login_mode?: "password" | "portal" }> {
+  return parseResponse(await fetch(apiUrl("/api/v1/auth/config"), { credentials: "same-origin" }));
 }
 
 export async function getCurrentUser(): Promise<AuthIdentity> {
@@ -19,7 +20,7 @@ export async function getCurrentUser(): Promise<AuthIdentity> {
 }
 
 async function credentialsRequest(path: string, email: string, password: string): Promise<AuthIdentity> {
-  const identity = await parseResponse<AuthIdentity>(await fetch(`/api/v1/auth/${path}`, {
+  const identity = await parseResponse<AuthIdentity>(await fetch(apiUrl(`/api/v1/auth/${path}`), {
     method: "POST",
     credentials: "same-origin",
     headers: { "Content-Type": "application/json" },

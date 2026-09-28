@@ -22,6 +22,9 @@ class LearningModel(PlanningModel, QuizPlanningModel, TaskPlanningModel, Protoco
         self, config: dict[str, Any], sources: list[Evidence]
     ) -> dict[str, Any]: ...
     async def grade_short(self, items: list[dict[str, Any]]) -> list[dict[str, Any]]: ...
+    async def grade_short_with_usage(
+        self, items: list[dict[str, Any]]
+    ) -> tuple[list[dict[str, Any]], dict[str, Any]]: ...
 
 
 class LearningService:
@@ -29,24 +32,34 @@ class LearningService:
         self.store = store
 
     async def create_collection(
-        self, workspace: UUID, name: str, description: str
+        self, workspace: UUID, name: str, description: str, document_ids: list[UUID] | None = None
     ) -> dict[str, Any]:
         name = name.strip()
         if not 1 <= len(name) <= 120:
             raise ApplicationError(
                 code="COLLECTION_INVALID", message="集合名称需为 1–120 字", status_code=422
             )
-        return await self.store.create_collection(workspace, name, description.strip())
+        documents = document_ids or []
+        if len(documents) > 100 or len(set(documents)) != len(documents):
+            raise ApplicationError(
+                code="SCOPE_INVALID", message="集合最多包含 100 份不重复资料", status_code=422
+            )
+        return await self.store.create_collection(workspace, name, description.strip(), documents)
 
     async def create_conversation(
-        self, workspace: UUID, title: str, documents: list[UUID], collections: list[UUID]
+        self,
+        workspace: UUID,
+        title: str,
+        documents: list[UUID],
+        collections: list[UUID],
+        key: str | None = None,
     ) -> dict[str, Any]:
         title = title.strip()
         if not 1 <= len(title) <= 160:
             raise ApplicationError(
                 code="CONVERSATION_INVALID", message="请填写对话标题", status_code=422
             )
-        return await self.store.create_conversation(workspace, title, documents, collections)
+        return await self.store.create_conversation(workspace, title, documents, collections, key)
 
     async def ask(
         self, workspace: UUID, conversation_id: UUID, key: str, question: str
@@ -163,7 +176,12 @@ class LearningProcessor:
                         task_usage(usage),
                     )
                 else:
-                    if plan.action == "review_mistakes" and review:
+                    if plan.action == "study":
+                        result = {
+                            "kind": "clarification",
+                            "text": "完整学习工作流尚未开启，请分别发送总结、出题与复习任务。",
+                        }
+                    elif plan.action == "review_mistakes" and review:
                         result = {
                             "kind": "review",
                             "quiz_id": review["quiz_id"],

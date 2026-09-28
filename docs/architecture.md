@@ -15,32 +15,35 @@ API、领域逻辑和数据访问先部署为一个应用，但代码按领域�
 
 - PostgreSQL 保存业务数据、处理状态和审计数据。
 - pgvector 保存首版向量，降低数据同步复杂度。
-- 原始文件和解析产物放对象存储；数据库只保存对象键、哈希和元数据。
-- Redis 仅作为任务队列、短期缓存或限流，不保存不可恢复的业务事实。
+- 原始文件放私有对象存储；有序解析正文、分块、向量、来源定位与业务元数据保存在 PostgreSQL，便于授权查询和版本追溯。
+- PDF 预览通过带工作区授权的 `/api/v1/documents/{id}/original` 获取私有原文件，API 在事务结束后下载并临时发送，响应结束即清理；前端按需加载 PDF.js 绘制当前页，页数由原文件确定，预览不依赖解析完成。提取正文仅供后台检索、问答和练习使用；DOCX/PPTX 前端显示暂不支持预览。
+- Redis 当前只用于短期限流；未来若引入队列或缓存，也不保存不可恢复的业务事实。
 
 ### 1.3 外部能力必须通过端口适配
 
 LLM、Embedding、重排、对象存储、文档解析、任务队列均定义应用侧接口。领域用例依赖接口，不直接依赖 OpenAI SDK、S3 SDK、某个解析库或队列实现。
 
-## 2. 目标架构
+## 2. 架构概览
+
+图中 PostgreSQL 任务投递与 Redis 限流是当前路径；SSE 是后续目标，当前问答与学习任务由前端轮询状态。
 
 ```mermaid
 flowchart LR
-    UI[Web UI] -->|HTTPS / SSE| API[FastAPI API]
+    UI[Web UI] -->|HTTPS / 状态轮询| API[FastAPI API]
     API --> AUTH[认证与授权]
     API --> PG[(PostgreSQL + pgvector)]
     API --> OBJ[(对象存储)]
-    API --> Q[任务队列]
-    Q --> WORKER[Document / AI Workers]
+    PG -->|持久任务与租约| WORKER[Document / AI Workers]
     WORKER --> OBJ
     WORKER --> PG
     WORKER --> PARSER[文档解析适配器]
-    WORKER --> AI[LLM / Embedding / Reranker]
+    WORKER --> AI[LLM / Embedding]
+    API --> REDIS[(Redis 限流)]
     API --> OBS[日志 / 指标 / Trace]
     WORKER --> OBS
 ```
 
-当前本地环境用 Docker Compose 运行 React Web、API、Worker、PostgreSQL、Redis 和兼容 S3 的 MinIO。Web 通过同源代理调用 API；用户使用邮箱、密码和服务端会话登录。认证账号与工作区成员关系位于应用 schema，密码哈希与会话摘要位于独立认证 schema。单台云服务器生产配置见 [上线与数据恢复手册](./production-operations.md)：Caddy 提供 HTTPS 与静态页面，内部服务不发布端口，凭据按服务通过秘密文件挂载，异机备份成对保存数据库与原文件；实际域名、备份目的地和监控告警仍需部署者配置。生产 Cookie 使用 Secure/HttpOnly/SameSite 和 CSRF 校验；本地脚本令牌仅在开发模式有效。
+当前本地环境用 Docker Compose 运行 React Web、API、Worker、PostgreSQL、Redis 和兼容 S3 的 MinIO。Web 通过同源代理调用 API；用户使用邮箱、密码和服务端会话登录。认证账号与工作区成员关系位于应用 schema，密码哈希与会话摘要位于独立认证 schema。单机独立站点方案使用 Caddy；[当前 fisher-ai.com 部署](./deployment-fisher-ai.md)使用宝塔 Nginx 子路径和现有门户身份。两种部署方式与恢复要求见[生产运维手册](./production-operations.md)。当前线上未启用异机备份，不能宣称已完成恢复演练。生产 Cookie 使用 Secure/HttpOnly/SameSite 和 CSRF 校验；本地脚本令牌仅在开发模式有效。
 
 ### 2.1 技术选型基线
 
@@ -71,29 +74,19 @@ flowchart LR
 
 ## 3. 代码边界
 
+以下是当前代码的主要目录；随着业务演进按真实边界增补，不为目标架构预建空模块。
+
 ```text
 app/
-  main.py                    # 应用组装，不放业务规则
-  api/                       # 路由、鉴权依赖、HTTP schema
-    v1/
-  core/                      # 配置、日志、数据库、通用安全能力
-  documents/
-    domain/                  # 实体、值对象、领域规则
-    application/             # 上传/索引/删除用例，端口定义
-    infrastructure/          # SQLAlchemy、存储、解析器实现
-  rag/
-    domain/
-    application/
-    infrastructure/
-  conversations/
-  quizzes/
-  jobs/                      # 任务入口、重试策略，不复制业务逻辑
-  shared/                    # 极少量稳定的跨领域类型
-tests/
-  unit/
-  integration/
-  contract/
-  e2e/
+  main.py                    # 应用组装
+  auth/                      # 账号、会话与工作区身份
+  core/                      # 配置、数据库、日志与通用安全能力
+  documents/                 # 文档领域、应用用例与基础设施适配器
+  rag/                       # 索引、检索、引用与单资料问答
+  learning/                  # 集合、对话、Quiz、Agent 运行与组织
+  jobs/                      # Worker 入口与心跳
+tests/                       # 后端行为与集成测试
+web/                         # React 页面、组件及前端测试
 ```
 
 依赖方向：
@@ -114,7 +107,7 @@ Domain 不导入 FastAPI、SQLAlchemy、模型 SDK、Redis 或对象存储 SDK�
 3. 文档与 `document_parse` 任务通过数据库幂等键持久化，API 立即返回 `202 Accepted`；迁移期仍允许消费已有 `pdf_parse` 任务。
 4. Worker 通过 `FOR UPDATE SKIP LOCKED` 和租约领取任务，下载文件，在禁止网络且具有超时、内容量和解压上限的子进程中解析。
 5. PDF 页、DOCX 标题段和 PPTX 幻灯片统一写入有序内容单元；每个单元携带 `citation_locator`（kind、position、title、path）。版本创建与 `active_version_id` 切换在同一事务完成，同一来源和解析器版本不会重复写入。
-6. 后续分块与 Embedding 完成后，继续沿版本化产物和原子激活扩展，禁止暴露半成品。
+6. 后续分块与 Embedding 写入对应 profile 的版本化索引；只有全部向量完成后索引才标为 `ready`，未完成索引不可用于问答。
 
 重要约束：任务采用至少一次投递，因此每一步必须幂等；禁止假定任务只执行一次。
 
@@ -131,10 +124,10 @@ Domain 不导入 FastAPI、SQLAlchemy、模型 SDK、Redis 或对象存储 SDK�
   → 上下文预算组装
   → 带引用生成
   → 引用/输出校验
-  → 流式返回并持久化
+  → 校验后持久化，前端轮询结果
 ```
 
-权限过滤必须进入检索 SQL，而不是检索后在 Python 中过滤，防止越权内容进入模型上下文。原始用户问题、检索结果、Prompt 版本、模型参数、Token 与引用关系应可审计，但日志默认不记录完整文档正文。
+权限过滤必须进入检索 SQL，而不是检索后在 Python 中过滤，防止越权内容进入模型上下文。审计记录使用稳定 ID、策略版本、用量与结果类别；普通日志不记录用户问题、检索正文、Prompt 或完整回答。
 
 ### 4.3 Quiz 生成
 
@@ -237,3 +230,7 @@ Quiz 生成不是一次自由文本调用，而是受约束的流水线：
 
 - [pgvector 官方文档](https://github.com/pgvector/pgvector)：近似索引、混合检索、过滤、迭代扫描和多租户注意事项。
 - [Celery 官方文档](https://docs.celeryq.dev/en/stable/getting-started/introduction.html)：任务队列、broker 和多 Worker 模型。
+
+## 13. 学习工作流实现（0014）
+
+`AgentRunProcessor` 通过 `AgentRunPersistence` 和 `StudyExecutor` 端口执行业务阶段；SQLAlchemy 存储和 LangGraph 证据节点均在适配器边界。API 创建运行后立即返回，Worker 执行耗时调用；已评分 attempt 与后续 review 排队同事务写入。PostgreSQL 仍是唯一事实源，Redis 保持限流/可替换用途。完整图持久化取舍见 [ADR-0002](./adr/0002-agent-business-checkpoints.md)。

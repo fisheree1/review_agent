@@ -1,4 +1,9 @@
 FAILURES = {
+    "RUN_RESULT_UNKNOWN": "当前步骤的请求结果未确认，已停止自动重试；已完成内容仍可查看。",
+    "RUN_BUDGET_EXCEEDED": "学习任务已达到累计预算，已完成内容仍可查看。",
+    "RUN_SOURCE_CHANGED": "原资料已更新或不可用，请选择资料后重新开始。",
+    "RUN_VERSION_UNSUPPORTED": "此任务版本暂不受支持，请重新开始。",
+    "RUN_EXPIRED": "任务等待期限已过，已保存学习记录仍可查看。",
     "PROVIDER_UNCONFIGURED": "AI 服务尚未配置，资料仍可正常阅读。",
     "PROVIDER_AUTH": "AI 服务密钥无效或无权限，请检查本地配置。",
     "PROVIDER_QUOTA": "AI 服务余额或额度不足，请检查服务商账户。",

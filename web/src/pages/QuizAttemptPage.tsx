@@ -11,14 +11,14 @@ export function QuizAttemptPage() {
   const quiz = useQuery({ queryKey: ["quiz", quizId], queryFn: () => getQuiz(quizId) });
   return <div className="app-page">
     <AppHeader />
-    <main className="learning-page learning-page--narrow" id="main-content">
-      <Link to={`/quizzes/${quizId}`}>← 返回 Quiz</Link>
+    <main className="learning-page learning-page--narrow" id="main-content" tabIndex={-1}>
+      <Link className="text-link" to={`/quizzes/${quizId}`}>← 返回 Quiz</Link>
       <header className="learning-heading"><span className="eyebrow">作答与复习</span>
         <h1>{quiz.data?.title ?? "正在打开 Quiz…"}</h1>
         <p>资料范围：{quiz.data?.scope.map((item) => item.filename).join("、")}</p>
       </header>
       {quiz.error ? <ErrorState message={quiz.error.message} onRetry={() => void quiz.refetch()} /> : null}
-      <QuizAttemptPanel quizId={quizId} attemptId={attemptId} />
+      <QuizAttemptPanel key={attemptId} quizId={quizId} attemptId={attemptId} />
     </main>
   </div>;
 }

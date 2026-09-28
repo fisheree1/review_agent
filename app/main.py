@@ -18,6 +18,7 @@ from app.core.request_limits import RequestBodyLimitMiddleware
 from app.documents.api import router as documents_router
 from app.jobs.models import WorkerHeartbeatModel
 from app.learning.api import router as learning_router
+from app.learning.organization_api import router as organization_router
 from app.rag.api import router as rag_router
 
 settings = get_settings()
@@ -53,6 +54,13 @@ app.include_router(documents_router)
 app.include_router(auth_router)
 app.include_router(rag_router)
 app.include_router(learning_router)
+app.include_router(organization_router)
+app.add_middleware(
+    RequestBodyLimitMiddleware, path="/api/v1/conversation-groups", max_bytes=4096, prefix=True
+)
+app.add_middleware(
+    RequestBodyLimitMiddleware, path="/api/v1/learning/checkins", max_bytes=4096, prefix=True
+)
 app.add_middleware(
     RequestBodyLimitMiddleware, path="/api/v1/documents/", max_bytes=16384, prefix=True
 )
