@@ -46,7 +46,7 @@ it("fetches the authorized PDF once and renders the selected page", async () => 
   rerender(<PdfPreview documentId="document-1" onPageCount={onPageCount} page={2} />);
   await waitFor(() => expect(getPage).toHaveBeenCalledWith(2));
   expect(getOriginalPdf).toHaveBeenCalledTimes(1);
-  expect(screen.getByText("PDF 原貌 · 第 2 页")).toBeVisible();
+  expect(screen.getByRole("img", { name: "PDF 原文件第 2 页" })).toBeVisible();
 });
 
 it("offers a retry when the private PDF cannot be fetched", async () => {
@@ -67,4 +67,28 @@ it("offers a retry when the private PDF cannot be fetched", async () => {
 
   await waitFor(() => expect(getPage).toHaveBeenCalledWith(1));
   expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+});
+
+it("shows consecutive pages and only draws pages near the viewport", async () => {
+  const observed = new Map<string, IntersectionObserverCallback>();
+  vi.stubGlobal("IntersectionObserver", class {
+    constructor(private callback: IntersectionObserverCallback) { /* observer callbacks are controlled by the test */ }
+    observe(element: Element) { observed.set(element.id, this.callback); }
+    disconnect() { /* no native observer in this test */ }
+  });
+  Object.defineProperty(Element.prototype, "scrollIntoView", { configurable: true, value: vi.fn() });
+  const renderPage = vi.fn(() => ({ promise: Promise.resolve(), cancel: vi.fn() }));
+  const getPage = vi.fn(async () => ({
+    getViewport: ({ scale }: { scale: number }) => ({ width: 400 * scale, height: 600 * scale }),
+    render: renderPage,
+  }));
+  vi.mocked(getOriginalPdf).mockResolvedValue(new Uint8Array([37, 80, 68, 70]));
+  vi.mocked(getDocument).mockReturnValue({ promise: Promise.resolve({ getPage, numPages: 3 }), destroy: vi.fn() } as unknown as ReturnType<typeof getDocument>);
+
+  render(<PdfPreview continuous documentId="document-1" page={1} />);
+  await waitFor(() => expect(screen.getByRole("region", { name: "第 3 页" })).toBeInTheDocument());
+  expect(getPage).not.toHaveBeenCalledWith(2);
+  observed.get("content-2")?.([{ isIntersecting: true } as IntersectionObserverEntry], {} as IntersectionObserver);
+  await waitFor(() => expect(getPage).toHaveBeenCalledWith(2));
+  expect(getOriginalPdf).toHaveBeenCalledTimes(1);
 });

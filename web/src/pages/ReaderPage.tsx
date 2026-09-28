@@ -4,7 +4,6 @@ import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom"
 
 import { type Citation } from "../api/rag";
 import { type DocumentSummary, deleteDocument, getDocument, isProcessing, retryDocument } from "../api/documents";
-import { documentTypeLabel } from "../citations";
 import { AppHeader } from "../components/AppHeader";
 import { DeleteDocumentDialog } from "../components/DeleteDocumentDialog";
 import { ErrorState } from "../components/ErrorState";
@@ -12,7 +11,6 @@ import { Icon } from "../components/Icon";
 import { QuickQuizAction } from "../components/QuickQuizAction";
 import { QuestionPanel } from "../components/QuestionPanel";
 import { ReferencePanel } from "../components/ReferencePanel";
-import { ShortcutsDialog } from "../components/ShortcutsDialog";
 import { StatusBadge } from "../components/StatusBadge";
 import { useDocuments } from "../hooks/useDocuments";
 import { useFocusTrap } from "../hooks/useFocusTrap";
@@ -20,12 +18,6 @@ import { useFocusTrap } from "../hooks/useFocusTrap";
 const PdfPreview = lazy(() => import("../components/PdfPreview").then((module) => ({ default: module.PdfPreview })));
 
 type SidePanel = "questions" | "references" | null;
-
-function processingMessage(status: DocumentSummary["status"]): string {
-  if (status === "uploaded") return "文件已保存，后台正在准备解析。原文件可以先行预览。";
-  if (status === "queued") return "资料已进入处理队列，原文件可以先行预览。";
-  return "后台正在提取资料内容，原文件可以先行预览。";
-}
 
 function isInteractiveTarget(target: EventTarget | null): boolean {
   return target instanceof HTMLElement && Boolean(target.closest("button, a, input, select, textarea, [contenteditable='true']"));
@@ -41,16 +33,14 @@ export function ReaderPage() {
   const [isCompact, setIsCompact] = useState(() => window.matchMedia("(max-width: 1099px)").matches);
   const [activePanel, setActivePanel] = useState<SidePanel>(null);
   const [hasOpenedQuestions, setHasOpenedQuestions] = useState(false);
-  const [isShortcutsOpen, setIsShortcutsOpen] = useState(false);
   const [isDeleteOpen, setIsDeleteOpen] = useState(false);
   const [answerCitation, setAnswerCitation] = useState<Citation | null>(null);
   const [loadedPdfPages, setLoadedPdfPages] = useState<{ documentId: string; count: number } | null>(null);
   const navRef = useRef<HTMLElement>(null);
   const questionRef = useRef<HTMLElement>(null);
-  const readingPositionRef = useRef<{ page: number; top: number } | null>(null);
-  const pendingRestoreRef = useRef<{ page: number; top: number } | null>(null);
+  const readingPositionRef = useRef<number | null>(null);
   const previousPanelRef = useRef<SidePanel>(null);
-  const pendingFocusRef = useRef(false);
+  const pendingPageRef = useRef<number | null>(null);
   const closeNav = useCallback(() => setIsNavOpen(false), []);
   useFocusTrap(navRef, isNavOpen, closeNav);
 
@@ -65,7 +55,7 @@ export function ReaderPage() {
     next.set("unit", String(page));
     next.delete("page");
     next.delete("view");
-    setSearchParams(next, { replace: true });
+    setSearchParams(next, { replace: true, preventScrollReset: true });
   }, [searchParams, setSearchParams]);
 
   const documentQuery = useQuery({
@@ -104,41 +94,36 @@ export function ReaderPage() {
 
   const selectPage = useCallback((page: number) => {
     const bounded = Math.min(Math.max(page, 1), Math.max(pageCount, 1));
-    pendingFocusRef.current = true;
+    pendingPageRef.current = bounded;
+    window.document.getElementById(`content-${bounded}`)?.scrollIntoView({ block: "start", behavior: "instant" });
     selectPageParams(bounded);
-    if (bounded === currentPage) {
-      window.requestAnimationFrame(() => {
-        const source = window.document.getElementById(`content-${bounded}`);
-        source?.scrollIntoView({ block: "start", behavior: "smooth" });
-        source?.focus({ preventScroll: true });
-        pendingFocusRef.current = false;
-      });
+  }, [pageCount, selectPageParams]);
+  const onVisiblePage = useCallback((page: number) => {
+    if (pendingPageRef.current !== null) {
+      if (page !== pendingPageRef.current) return;
+      pendingPageRef.current = null;
     }
-  }, [currentPage, pageCount, selectPageParams]);
+    if (page !== currentPage) selectPageParams(page);
+  }, [currentPage, selectPageParams]);
 
   const closeQuestions = useCallback(() => {
     setActivePanel(previousPanelRef.current);
     setAnswerCitation(null);
     const position = readingPositionRef.current;
     readingPositionRef.current = null;
-    if (!position) return;
-    pendingRestoreRef.current = position;
-    if (currentPage !== position.page) selectPageParams(position.page);
-    else window.requestAnimationFrame(() => {
-      window.scrollTo(0, position.top);
-      pendingRestoreRef.current = null;
-    });
-  }, [currentPage, selectPageParams]);
+    pendingPageRef.current = null;
+    if (position !== null) window.requestAnimationFrame(() => window.scrollTo(0, position));
+  }, []);
   useFocusTrap(questionRef, isCompact && activePanel === "questions", closeQuestions);
   const openQuestions = useCallback(() => {
     if (!readingPositionRef.current) {
       previousPanelRef.current = activePanel;
-      readingPositionRef.current = { page: currentPage, top: window.scrollY };
+      readingPositionRef.current = window.scrollY;
       setHasOpenedQuestions(true);
     }
     setActivePanel("questions");
-  }, [activePanel, currentPage]);
-  const closeReferences = useCallback(() => setActivePanel(readingPositionRef.current ? "questions" : null), []);
+  }, [activePanel]);
+  const closeReferences = useCallback(() => setActivePanel(readingPositionRef.current !== null ? "questions" : null), []);
 
   useEffect(() => {
     const media = window.matchMedia("(max-width: 1099px)");
@@ -154,7 +139,6 @@ export function ReaderPage() {
     setActivePanel(null);
     setHasOpenedQuestions(false);
     readingPositionRef.current = null;
-    pendingRestoreRef.current = null;
   }, [documentId]);
 
   useEffect(() => {
@@ -162,23 +146,6 @@ export function ReaderPage() {
     const bounded = Math.min(Math.max(currentPage, 1), pageCount);
     if (bounded !== currentPage || hasLegacyPage) selectPageParams(bounded);
   }, [currentPage, hasExplicitPage, hasLegacyPage, isPdf, pageCount, selectPageParams]);
-
-  useEffect(() => {
-    if (!isPdf || !hasExplicitPage) return;
-    window.requestAnimationFrame(() => {
-      const restore = pendingRestoreRef.current;
-      if (restore?.page === currentPage) {
-        window.scrollTo(0, restore.top);
-        pendingRestoreRef.current = null;
-        pendingFocusRef.current = false;
-        return;
-      }
-      const source = window.document.getElementById(`content-${currentPage}`);
-      source?.scrollIntoView({ block: "start", behavior: pendingFocusRef.current ? "smooth" : "instant" });
-      if (pendingFocusRef.current) source?.focus({ preventScroll: true });
-      pendingFocusRef.current = false;
-    });
-  }, [currentPage, documentId, hasExplicitPage, isPdf]);
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
@@ -190,10 +157,7 @@ export function ReaderPage() {
         return;
       }
       if (isInteractiveTarget(event.target)) return;
-      if (event.key === "?") {
-        event.preventDefault();
-        setIsShortcutsOpen(true);
-      } else if (isPdf && event.key === "[") {
+      if (isPdf && event.key === "[") {
         event.preventDefault();
         selectPage(currentPage - 1);
       } else if (isPdf && event.key === "]") {
@@ -217,7 +181,6 @@ export function ReaderPage() {
           title="资料问答"
           type="button"
         ><Icon name="chat" /></button> : null}
-        {isPdf ? <button aria-label="查看预览快捷键" className="icon-button" onClick={() => setIsShortcutsOpen(true)} title="预览快捷键" type="button"><Icon name="help" /></button> : null}
       </AppHeader>
 
       <div className={`reader-shell${activePanel ? " reader-shell--with-sidebar" : ""}`}>
@@ -253,29 +216,29 @@ export function ReaderPage() {
               : document?.status === "deleting" ? <ErrorState title="资料正在删除" message="原文件暂时无法预览。" />
                 : document ? <article className="document-reader document-reader--pdf">
                   <header className="document-reader__header">
-                    <Link className="text-link" to="/"><Icon name="chevronLeft" />资料库</Link>
-                    <span className="eyebrow">{documentTypeLabel(document.media_type)}{isPdf && pageCount > 0 ? ` · ${pageCount} 页` : ""}</span>
-                    <h1>{document.filename}</h1>
-                    {historicalVersion ? <p role="status">正在查看该资料的原文件。引用所用的解析版本保留在链接中。</p> : null}
-                    {isProcessing(document.status) ? <div role="status"><StatusBadge status={document.status} /><p>{isPdf ? processingMessage(document.status) : "这份旧资料仍在后台处理中，不提供文件预览。"}</p></div> : null}
+                    <h1 title={document.filename}>{document.filename}</h1>
+                    {isPdf && pageCount > 0 ? <span className="document-reader__page-count">{pageCount} 页</span> : null}
+                    {isProcessing(document.status) ? <div role="status"><StatusBadge status={document.status} /></div> : null}
                     {document.status === "failed" ? <div className="document-reader__processing-error" role="alert">
-                      <p>后台处理失败：{document.failure_message ?? "请重新处理资料。"}{isPdf ? "原文件仍可预览。" : "这份旧资料不提供文件预览。"}</p>
+                      <p>处理失败：{document.failure_message ?? "请重新处理资料。"}</p>
                       <button className="button button--secondary" disabled={retryMutation.isPending} onClick={() => retryMutation.mutate()} type="button">{retryMutation.isPending ? "正在提交…" : "重新处理"}</button>
                       {retryMutation.error ? <p>{retryMutation.error.message}</p> : null}
                     </div> : null}
-                    {isPdf ? <p>使用底部导航或 <kbd>[</kbd> 与 <kbd>]</kbd> 切换 PDF 页面。</p> : null}
-                    {document.status === "ready" && !historicalVersion ? <button aria-controls={hasOpenedQuestions ? "reader-questions" : undefined} aria-expanded={activePanel === "questions"} className="button button--secondary" onClick={() => activePanel === "questions" ? closeQuestions() : openQuestions()} type="button">{activePanel === "questions" ? "收起资料问答" : "基于此资料提问"}</button> : null}
-                    {isPdf && document.status === "ready" && !historicalVersion ? <QuickQuizAction documentId={documentId} filename={document.filename} key={documentId} /> : null}
-                    <button className="button button--danger-quiet document-reader__delete" onClick={() => setIsDeleteOpen(true)} type="button">删除资料</button>
+                    <details className="document-reader__actions"><summary aria-label="资料操作" title="资料操作"><Icon name="menu" /></summary>
+                      <div className="document-reader__action-menu">
+                        {isPdf && document.status === "ready" && !historicalVersion ? <QuickQuizAction documentId={documentId} filename={document.filename} key={documentId} /> : null}
+                        <button className="button button--danger-quiet" onClick={() => setIsDeleteOpen(true)} type="button">删除资料</button>
+                      </div>
+                    </details>
                   </header>
-                  {isPdf ? <section aria-label={`第 ${currentPage} 页`} className="document-reader__preview" id={`content-${currentPage}`} tabIndex={-1}>
+                  {isPdf ? <section aria-label="PDF 原文件" className="document-reader__preview">
                     <Suspense fallback={<p role="status">正在加载 PDF 预览…</p>}>
-                      <PdfPreview documentId={documentId} key={documentId} onPageCount={onPageCount} page={currentPage} />
+                      <PdfPreview continuous documentId={documentId} key={documentId} onPageChange={onVisiblePage} onPageCount={onPageCount} page={currentPage} />
                     </Suspense>
                   </section> : <section className="preview-unavailable" role="status">
                     <Icon name="document" />
                     <h2>暂不支持预览</h2>
-                    <p>这份旧资料不是 PDF。你仍可查看已保存的问答与引用；新上传仅支持 PDF。</p>
+                    <p>仅支持 PDF 预览。</p>
                   </section>}
                 </article> : null}
         </main>
@@ -298,16 +261,15 @@ export function ReaderPage() {
           isCompact={isCompact}
           isOpen={activePanel === "references"}
           onClose={closeReferences}
-          onOpenCitation={(citation) => { selectPageParams(citation.unit); if (isCompact) setActivePanel(null); }}
+          onOpenCitation={(citation) => { selectPage(citation.unit); if (isCompact) setActivePanel(null); }}
         /> : null}
       </div>
 
       {isPdf && document && pageCount > 0 && document.status !== "deleting" ? <div aria-live="polite" className="reader-footer">
-        <button aria-label="上一页" disabled={currentPage <= 1} onClick={() => selectPage(currentPage - 1)} type="button"><Icon name="chevronLeft" /></button>
+        <button aria-label="上一页" disabled={currentPage <= 1} onClick={() => selectPage(currentPage - 1)} title="上一页 ([)" type="button"><Icon name="chevronLeft" /></button>
         <span>第 {currentPage} / {pageCount} 页</span>
-        <button aria-label="下一页" disabled={currentPage >= pageCount} onClick={() => selectPage(currentPage + 1)} type="button"><Icon name="chevronRight" /></button>
+        <button aria-label="下一页" disabled={currentPage >= pageCount} onClick={() => selectPage(currentPage + 1)} title="下一页 (])" type="button"><Icon name="chevronRight" /></button>
       </div> : null}
-      <ShortcutsDialog isOpen={isShortcutsOpen} onClose={() => setIsShortcutsOpen(false)} />
       {document ? <DeleteDocumentDialog
         error={deleteMutation.error?.message ?? null}
         filename={document.filename}

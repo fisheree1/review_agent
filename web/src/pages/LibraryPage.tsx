@@ -63,7 +63,6 @@ export function LibraryPage() {
         <section aria-labelledby="library-title" className="library-section">
           <div className="section-heading">
             <h2 id="library-title">全部资料</h2>
-            <p>{documents.length > 0 ? `${documents.length} 份资料` : "资料会按最近上传排序"}</p>
           </div>
           <div className="library-toolbar">
             <div className="field"><label htmlFor="library-search">搜索全部资料</label><input id="library-search" name="library-search" autoComplete="off" type="search" maxLength={160} placeholder="输入文件名…" value={query} onChange={(event) => setFilter("search", event.target.value)} /></div>

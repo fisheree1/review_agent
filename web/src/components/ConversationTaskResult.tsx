@@ -31,7 +31,6 @@ function ConversationQuiz({ quizId, messageId, onRequest }: {
     {attemptId ? <QuizAttemptPanel key={attemptId} quizId={quizId} attemptId={attemptId}
       onPractice={() => onRequest("根据我最近练习的薄弱知识点，再生成 5 道中等难度单选题。")}
     /> : <>
-      <p>准备好后直接在这里作答，提交前不会显示答案和解析。</p>
       <button className="button button--primary" disabled={start.isPending || quiz.data?.status !== "ready"}
         onClick={() => start.mutate()} type="button">{start.isPending ? "正在打开…" : "在对话中作答"}</button>
     </>}
