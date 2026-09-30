@@ -185,6 +185,8 @@ docker compose ps
 
 `0002_document_ingestion` 创建资料闭环所需的五张表。`0003`–`0007` 逐步增加游标索引、租户完整性、Worker 心跳与统一 citation locator；`0008_cited_rag` 增加索引、分块和独立问答任务；`0009_learning_core` 增加集合、连续对话、反馈、Quiz 与作答表；`0010_user_auth` 增加账号、成员、密码哈希、会话及登录限流；`0011_version_purge_trigger` 将学习记录清理限定于解析版本实际删除。每次改模型后运行 `docker compose run --rm database-init alembic check`，并从空库与上一 revision 验证升级。
 
+`0016_conversation_memory` 为对话添加可空的同资料范围记忆投影。发布顺序为迁移、兼容 v1/v2 的 Worker、创建 v2 运行的 API/Web；避免旧 Worker 领取并拒绝新运行。旧运行仍按 `study-graph-v1` 恢复；回退应用时保留新增列，避免丢失会话数据。知识点 PDF 使用随应用镜像分发的 Noto Sans SC 字体和 ReportLab，不依赖服务器系统字体。
+
 当前 Worker 直接领取 PostgreSQL 中的持久任务，使用短事务、租约、尝试上限和幂等键。PDF 解析在禁止网络的子进程执行，API 只做流式上传与结构校验，不解析正文。将 Redis 用作任务队列或引入 Celery 前先依据 [ADR-0001](./adr/0001-postgresql-document-jobs.md) 的迁移门槛评审，不能形成第二份任务状态。
 
 Redis 当前只做 API 限流：登录按邮箱摘要，上传、索引、问答、Quiz 和反馈按工作区计数。限流脚本原子设置过期时间，并允许同一工作区和动作的幂等键重放。超额返回 `RATE_LIMITED`（429）；Redis 不可用返回 `RATE_LIMIT_UNAVAILABLE`（503），不继续执行高成本操作。开发模式直接运行 API 时默认关闭 Redis 限流；Compose 中开启。生产模式必须启用并配置 Redis 密码。

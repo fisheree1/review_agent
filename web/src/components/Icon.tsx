@@ -17,6 +17,8 @@ export type IconName =
   | "panel"
   | "plus"
   | "refresh"
+  | "send"
+  | "stop"
   | "sun"
   | "upload";
 
@@ -37,6 +39,8 @@ const paths: Record<IconName, React.ReactNode> = {
   panel: <><rect width="18" height="18" x="3" y="3" rx="2" /><path d="M15 3v18" /></>,
   plus: <><path d="M12 5v14" /><path d="M5 12h14" /></>,
   refresh: <><path d="M20 11a8 8 0 0 0-15-4l-2 3" /><path d="M3 4v6h6" /><path d="M4 13a8 8 0 0 0 15 4l2-3" /><path d="M21 20v-6h-6" /></>,
+  send: <><path d="M12 19V5" /><path d="m5 12 7-7 7 7" /></>,
+  stop: <rect x="6" y="6" width="12" height="12" rx="2" />,
   sun: <><circle cx="12" cy="12" r="4" /><path d="M12 2v2" /><path d="M12 20v2" /><path d="m4.93 4.93 1.42 1.42" /><path d="m17.66 17.66 1.41 1.41" /><path d="M2 12h2" /><path d="M20 12h2" /><path d="m6.34 17.66-1.41 1.41" /><path d="m19.07 4.93-1.41 1.42" /></>,
   upload: <><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><path d="m17 8-5-5-5 5" /><path d="M12 3v12" /></>,
 };

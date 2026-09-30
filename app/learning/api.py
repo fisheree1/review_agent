@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime
 from typing import Annotated, Any, Literal
 from uuid import UUID
@@ -12,6 +13,7 @@ from app.core.config import AgentSettings, RagSettings
 from app.core.database import async_session_factory
 from app.core.rate_limit import RedisRateLimiter, enforce_rate_limit, get_rate_limiter
 from app.learning.application import LearningService
+from app.learning.pdf_export import render_study_pdf
 from app.learning.run_store import SqlAgentRunStore
 from app.learning.store import SqlLearningStore
 from app.rag.api import AnswerResponse
@@ -84,12 +86,16 @@ class TaskResultResponse(BaseModel):
     title: str | None = None
 
 
+class StudyAnswerResponse(AnswerResponse):
+    explanation: str | None = None
+
+
 class MessageResponse(BaseModel):
     id: UUID
     question: str
     status: Literal["queued", "processing", "answered", "insufficient", "failed", "cancelled"]
     scope: list[ScopeDocument]
-    answer: AnswerResponse | None
+    answer: StudyAnswerResponse | None
     task_result: TaskResultResponse | None = None
     failure_code: str | None
     failure_message: str | None
@@ -217,6 +223,27 @@ class RunListResponse(BaseModel):
 class RunInput(BaseModel):
     answer: str = Field(min_length=2, max_length=1200)
     expected_revision: int = Field(ge=0)
+
+
+@router.get(
+    "/agent-runs/{run_id}/notes.pdf",
+    response_class=Response,
+    responses={200: {"content": {"application/pdf": {}}}},
+)
+async def download_study_pdf(run_id: UUID, principal: Auth, service: Service) -> Response:
+    title, answer, scope, coverage = await SqlAgentRunStore(service.store).pdf_material(
+        principal.workspace_public_id, run_id
+    )
+    content = await asyncio.to_thread(render_study_pdf, title, answer, scope, coverage)
+    return Response(
+        content=content,
+        media_type="application/pdf",
+        headers={
+            "Cache-Control": "private, no-store",
+            "Content-Disposition": 'attachment; filename="study-notes.pdf"',
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 
 
 @router.get("/conversations/{conversation_id}/agent-runs", response_model=RunListResponse)

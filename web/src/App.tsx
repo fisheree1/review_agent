@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 
 import { getCurrentUser } from "./api/auth";
+import { setCsrfToken } from "./api/client";
 import { ApiError } from "./api/documents";
 import { ErrorState } from "./components/ErrorState";
 import { LibraryPage } from "./pages/LibraryPage";
@@ -21,6 +22,8 @@ export function App() {
   const auth = useQuery({ queryKey: ["auth-me"], queryFn: getCurrentUser, retry: false });
   useEffect(() => {
     const expire = () => {
+      setCsrfToken(null);
+      queryClient.removeQueries({ predicate: (query) => query.queryKey[0] !== "auth-me" });
       queryClient.setQueryData(["auth-me"], null);
       void queryClient.invalidateQueries({ queryKey: ["auth-me"] });
     };

@@ -59,6 +59,11 @@ class PlannedModel:
             ],
         }, {"model": "fake", "prompt_tokens": 30, "completion_tokens": 10}
 
+    async def answer_study(
+        self, question: str, sources: list[Evidence], *, history: list[dict[str, str]] | None = None
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        return await self.answer(question, sources, history=history)
+
 
 def source(content: str) -> Evidence:
     return Evidence(

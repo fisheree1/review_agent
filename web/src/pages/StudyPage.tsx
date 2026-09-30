@@ -1,12 +1,12 @@
-import { useCallback, useEffect, useId, useRef, useState } from "react";
-import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { useInfiniteQuery, useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "react-router-dom";
 
 import type { DocumentSummary } from "../api/documents";
 import type { Citation } from "../api/rag";
 import {
   askConversation, cancelConversationMessage, createCollection, createConversation,
-  deleteCollection, getConversation, listCollections, listConversations,
+  deleteCollection, getAgentRun, getConversation, listCollections, listConversations,
   rateConversationMessage, setCollectionDocuments, setConversationScope,
   type Collection, type ConversationMessage, type ScopeChoice,
 } from "../api/learning";
@@ -40,6 +40,8 @@ function StudyAnswer({ message, onSource }: {
     .map((citation) => [citation.source_id, citation])).values());
   return <div className="study-answer">
     {message.answer.claims.map((claim, index) => <p key={index}>{claim.text}</p>)}
+    {message.answer.explanation?.split("\n").filter((part) => part.trim()).map((part, index) =>
+      <p key={`explanation-${index}`}>{part}</p>)}
     {sources.length ? <details className="study-sources"><summary>来源 · {sources.length}</summary>
       <div>{sources.map((citation) => {
         const filename = message.scope.find((item) => item.document_id === citation.document_id)?.filename ?? "原文";
@@ -114,6 +116,12 @@ export function StudyPage() {
     refetchInterval: (query) => query.state.data?.messages.some((message) =>
       message.status === "queued" || message.status === "processing") ? 1500 : false,
   });
+  const runMessages = detail.data?.messages.filter((message) => message.run_id) ?? [];
+  const runStates = useQueries({ queries: runMessages.map((message) => ({
+    queryKey: ["agent-run", message.run_id],
+    queryFn: () => getAgentRun(message.run_id!),
+    refetchInterval: (query: { state: { data?: { status: string } } }) => query.state.data && ["queued", "running"].includes(query.state.data.status) ? 1500 : false,
+  })) });
   const [historyCollapsed, setHistoryCollapsed] = useState(false);
   const [collectionName, setCollectionName] = useState("");
   const [activeScope, setActiveScope] = useState<ScopeChoice>(emptyScope);
@@ -123,6 +131,12 @@ export function StudyPage() {
   const closeSource = useCallback(() => setSelectedSource(null), []);
   const askKey = useRef<{ fingerprint: string; key: string } | null>(null);
   const composer = useRef<HTMLTextAreaElement>(null);
+  useLayoutEffect(() => {
+    const input = composer.current;
+    if (!input) return;
+    input.style.height = "auto";
+    input.style.height = `${Math.min(Math.max(input.scrollHeight, 46), 160)}px`;
+  }, [question, conversationId]);
   const createKey = useRef<{ fingerprint: string; key: string } | null>(null);
   const feedbackKeys = useRef<Record<string, string>>({});
   const refreshCollections = () => { void cache.invalidateQueries({ queryKey: ["collections"] }); };
@@ -182,8 +196,9 @@ export function StudyPage() {
   });
   const error = documentsError ?? collections.error ?? conversations.error ?? detail.error
     ;
-  const legacyWorking = detail.data?.messages.some((message) => !message.run_id && (message.status === "queued" || message.status === "processing")) ?? false;
-  const canSend = Boolean(detail.data?.scope.length) && question.trim().length >= 2 && !ask.isPending && !legacyWorking;
+  const activeMessage = runMessages.find((_, index) => ["queued", "running"].includes(runStates[index]?.data?.status ?? ""))
+    ?? detail.data?.messages.find((message) => message.status === "queued" || message.status === "processing");
+  const canSend = Boolean(detail.data?.scope.length) && question.trim().length >= 2 && !ask.isPending && !activeMessage;
   const hasAvailableSource = Boolean(nextCursor) || documents.some((document) => document.status === "ready") || (collections.data ?? []).some((collection) => collection.document_ids.length > 0);
   const processingDocuments = documents.some((document) => ["uploaded", "queued", "parsing"].includes(document.status));
   const firstUse = !conversationId && !documentsLoading && !collections.isPending && !conversations.isPending
@@ -204,12 +219,11 @@ export function StudyPage() {
               <ConversationMessages key={conversationId} updateKey={JSON.stringify(detail.data.messages.map((message) => [message.id, message.status, message.answer, message.task_result]))}>{detail.data.messages.length === 0 ? <div className="agent-empty">
                 {detail.data.scope.length === 0 ? <p>选择资料后开始对话</p> : null}
                 {detail.data.scope.length ? <div className="agent-suggestions" aria-label="任务示例">{taskExamples.map(([label, request]) =>
-                  <button className="text-action" disabled={ask.isPending || legacyWorking} key={label} onClick={() => draftTask(request)} type="button">{label}</button>)}</div> : null}
+                  <button className="text-action" disabled={ask.isPending || Boolean(activeMessage)} key={label} onClick={() => draftTask(request)} type="button">{label}</button>)}</div> : null}
               </div> : null}
                 {detail.data.messages.map((message) => <article className="learning-message" key={message.id}>
                   <div className="agent-request"><h3>{message.question}</h3></div>
-                  {!message.run_id && (message.status === "queued" || message.status === "processing") ? <div className="agent-progress"><p role="status">{message.task_result?.kind === "quiz" ? message.task_result.text : "正在规划任务并寻找依据…"}</p>
-                    <button className="button button--secondary" disabled={cancel.isPending} onClick={() => cancel.mutate(message.id)} type="button">停止任务</button></div> : null}
+                  {!message.run_id && (message.status === "queued" || message.status === "processing") ? <div className="agent-progress"><p role="status">{message.task_result?.kind === "quiz" ? message.task_result.text : "正在规划任务并寻找依据…"}</p></div> : null}
                   {message.status === "cancelled" ? <p role="status">已停止任务。</p> : null}
                   {message.status === "failed" ? <div role="alert"><p>{message.failure_message ?? "任务执行失败，请调整要求后重试。"}</p>
                     <button className="button button--secondary" onClick={() => draftTask(message.question)} type="button">重新编辑任务</button></div> : null}
@@ -229,17 +243,27 @@ export function StudyPage() {
               {cancel.error ? <p role="alert">{cancel.error.message}，可再次停止任务。</p> : null}
               {feedback.error ? <p role="alert">{feedback.error.message}，可重新提交反馈。</p> : null}
               <form className="agent-composer" onSubmit={(event) => { event.preventDefault(); if (canSend) ask.mutate(question); }}>
-                <details className="agent-scope" onToggle={(event) => setScopeOpen(event.currentTarget.open)} open={scopeOpen}><summary>{detail.data.scope.length ? `资料 · ${detail.data.scope.length}` : "选择资料"}</summary>
-                  <ScopePicker collections={collections.data ?? []} documents={documents} hasMore={Boolean(nextCursor)} label="资料范围" loading={documentsLoading} onChange={setActiveScope} selectedLabels={detail.data.scope.map((item) => ({ id: item.document_id, filename: item.filename }))} value={activeScope} />
-                  {nextCursor ? <button className="button button--secondary" onClick={() => void loadMore()} type="button">加载更多资料</button> : null}
-                  {switchScope.error ? <p role="alert">{switchScope.error.message}，可重试保存。</p> : null}
-                  <button className="button button--secondary" disabled={switchScope.isPending} onClick={() => switchScope.mutate()} type="button">保存范围</button>
-                </details>
                 <label className="visually-hidden" htmlFor="conversation-question">发送任务或问题</label>
-                <textarea placeholder="提问或安排学习任务…" ref={composer} id="conversation-question" name="conversation-question" autoComplete="off" maxLength={2000} onChange={(event) => setQuestion(event.target.value)} rows={2} value={question}
-                  onKeyDown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key === "Enter" && !event.nativeEvent.isComposing) { event.preventDefault(); if (canSend) ask.mutate(question); } }} />
-                <div className="agent-composer-footer">
-                  <button className="button button--primary" disabled={!canSend} type="submit">{ask.isPending ? "正在发送…" : "发送"}</button></div>
+                <div className="agent-composer__shell">
+                  <textarea placeholder="提问或安排学习任务…" ref={composer} id="conversation-question" name="conversation-question" autoComplete="off" maxLength={2000} onChange={(event) => setQuestion(event.target.value)} rows={1} value={question}
+                    onKeyDown={(event) => {
+                      if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
+                      event.preventDefault();
+                      if (canSend) ask.mutate(question);
+                    }} />
+                  <div className="agent-composer-footer">
+                    <details className="agent-scope" onToggle={(event) => setScopeOpen(event.currentTarget.open)} open={scopeOpen}><summary>{detail.data.scope.length ? `资料 · ${detail.data.scope.length}` : "选择资料"}</summary>
+                      <div className="agent-scope__panel">
+                        <ScopePicker collections={collections.data ?? []} documents={documents} hasMore={Boolean(nextCursor)} label="资料范围" loading={documentsLoading} onChange={setActiveScope} selectedLabels={detail.data.scope.map((item) => ({ id: item.document_id, filename: item.filename }))} value={activeScope} />
+                        {nextCursor ? <button className="button button--secondary" onClick={() => void loadMore()} type="button">加载更多资料</button> : null}
+                        {switchScope.error ? <p role="alert">{switchScope.error.message}，可重试保存。</p> : null}
+                        <button className="button button--secondary" disabled={switchScope.isPending} onClick={() => switchScope.mutate()} type="button">保存范围</button>
+                      </div>
+                    </details>
+                    {activeMessage ? <button className="agent-composer__action" aria-label="停止生成" disabled={cancel.isPending} onClick={() => cancel.mutate(activeMessage.id)} type="button"><Icon name="stop" /></button>
+                      : <button className="agent-composer__action" aria-label="发送" disabled={!canSend} type="submit"><Icon name="send" /></button>}
+                  </div>
+                </div>
               </form>
             </> : null}
           </section> : <section className="workspace-empty learning-card">

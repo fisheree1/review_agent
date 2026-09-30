@@ -7,11 +7,13 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import and_, delete, select, update
+from sqlalchemy import and_, delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ApplicationError
+from app.documents.infrastructure.models import DocumentModel
 from app.learning.conversation_tasks import TaskPlan
+from app.learning.graph_tasks import GraphTaskPlan
 from app.learning.models import (
     Conversation,
     ConversationMessage,
@@ -20,11 +22,13 @@ from app.learning.models import (
     QuizDocument,
     QuizQuestion,
 )
+from app.learning.pdf_export import PDF_EXPORT_VERSION
 from app.learning.run_models import AgentRun, AgentStageExecution
 from app.learning.scope import missing, retrieve_sources, snapshot_ready
 from app.learning.store import LEASE_SECONDS, SqlLearningStore
 from app.learning.workflow import (
     GRAPH_VERSION,
+    LEGACY_GRAPH_VERSION,
     MAX_RUN_CALLS,
     MAX_RUN_COST_UNITS,
     MAX_RUN_SECONDS,
@@ -34,6 +38,7 @@ from app.learning.workflow import (
 )
 from app.rag.domain import Evidence, RagFailure
 from app.rag.messages import FAILURES
+from app.rag.models import DocumentChunk, DocumentIndex
 
 
 def run_view(run: AgentRun) -> dict[str, Any]:
@@ -89,6 +94,30 @@ class SqlAgentRunStore:
                 await self._fail_message(session, run, "RUN_SOURCE_CHANGED")
                 await self._stop_grading(session, run, "RUN_SOURCE_CHANGED")
             return run_view(run)
+
+    async def pdf_material(
+        self, principal: UUID, public_id: UUID
+    ) -> tuple[str, dict[str, Any], list[dict[str, Any]], dict[str, int] | None]:
+        async with self.sessions.begin() as session:
+            workspace = await self.learning._workspace(session, principal)
+            run = await self._owned(session, workspace, public_id)
+            if not any(output.get("kind") == "pdf" for output in run.outputs):
+                raise missing()
+            if not await snapshot_ready(session, workspace, run.scope, run.profile):
+                raise missing()
+            message = await session.get(ConversationMessage, run.message_id)
+            if message is None or not message.answer or message.answer.get("insufficient_evidence"):
+                raise missing()
+            summary = next(
+                (output for output in run.outputs if output.get("kind") == "summary"), {}
+            )
+            subject = ((run.plan or {}).get("summary_request") or "").strip()
+            return (
+                subject[:80] if subject else "知识点整理",
+                message.answer,
+                run.scope,
+                summary.get("coverage"),
+            )
 
     async def list_runs(
         self, principal: UUID, conversation: UUID, cursor: int, limit: int
@@ -266,7 +295,7 @@ class SqlAgentRunStore:
                 )
                 if busy:
                     continue
-                if run.graph_version != GRAPH_VERSION:
+                if run.graph_version not in (LEGACY_GRAPH_VERSION, GRAPH_VERSION):
                     self._close(run, "blocked", "RUN_VERSION_UNSUPPORTED")
                     await self._fail_message(session, run, "RUN_VERSION_UNSUPPORTED")
                     await self._stop_grading(session, run, "RUN_VERSION_UNSUPPORTED")
@@ -321,6 +350,12 @@ class SqlAgentRunStore:
                     }
                     for m in reversed(previous)
                 ]
+                memory = conversation.memory or {}
+                memory_summary = (
+                    str(memory.get("summary", ""))[:700]
+                    if run.graph_version == GRAPH_VERSION and memory.get("scope") == run.scope
+                    else ""
+                )
                 return {
                     **run_view(run),
                     "fence": run.fence,
@@ -330,6 +365,7 @@ class SqlAgentRunStore:
                     "response": run.response,
                     "usage": run.usage,
                     "history": history,
+                    "memory_summary": memory_summary,
                 }
             return None
 
@@ -342,7 +378,7 @@ class SqlAgentRunStore:
                 AgentRun.status == "running",
                 AgentRun.lease_until > datetime.now(UTC),
                 AgentRun.expires_at > datetime.now(UTC),
-                AgentRun.graph_version == GRAPH_VERSION,
+                AgentRun.graph_version.in_([LEGACY_GRAPH_VERSION, GRAPH_VERSION]),
             )
             .with_for_update()
         )
@@ -364,6 +400,86 @@ class SqlAgentRunStore:
             return await retrieve_sources(
                 session, run.workspace_id, run.scope, run.profile, vector, query
             )
+
+    async def overview_sources(
+        self, public_id: UUID, fence: UUID
+    ) -> tuple[list[Evidence], dict[str, int]]:
+        """Sample selected active versions across their entire indexed page range."""
+        async with self.sessions.begin() as session:
+            run = await self._active(session, public_id, fence)
+            per_document = max(1, 15 // len(run.scope))
+            sources: list[Evidence] = []
+            total_pages = 0
+            sampled_pages: set[tuple[int, int]] = set()
+            for item in run.scope:
+                index_id = await session.scalar(
+                    select(DocumentIndex.id)
+                    .join(
+                        DocumentModel,
+                        and_(
+                            DocumentModel.active_version_id == DocumentIndex.document_version_id,
+                            DocumentModel.workspace_id == DocumentIndex.workspace_id,
+                        ),
+                    )
+                    .where(
+                        DocumentIndex.workspace_id == run.workspace_id,
+                        DocumentIndex.document_version_id == item["version_id"],
+                        DocumentIndex.profile == run.profile,
+                        DocumentIndex.status == "ready",
+                        DocumentModel.public_id == UUID(item["document_id"]),
+                        DocumentModel.status == "ready",
+                        DocumentModel.deleted_at.is_(None),
+                    )
+                )
+                if index_id is None:
+                    raise RagFailure("RUN_SOURCE_CHANGED", "资料索引已变化")
+                page_count = await session.scalar(
+                    select(func.count(func.distinct(DocumentChunk.unit))).where(
+                        DocumentChunk.workspace_id == run.workspace_id,
+                        DocumentChunk.index_id == index_id,
+                    )
+                )
+                total_pages += page_count or 0
+                count = await session.scalar(
+                    select(func.count(DocumentChunk.id)).where(
+                        DocumentChunk.workspace_id == run.workspace_id,
+                        DocumentChunk.index_id == index_id,
+                    )
+                )
+                if not count:
+                    continue
+                sample_count = min(per_document, count)
+                offsets = sorted(
+                    {
+                        min(count - 1, (2 * index + 1) * count // (2 * sample_count))
+                        for index in range(sample_count)
+                    }
+                )
+                for offset in offsets:
+                    chunk = await session.scalar(
+                        select(DocumentChunk)
+                        .where(
+                            DocumentChunk.workspace_id == run.workspace_id,
+                            DocumentChunk.index_id == index_id,
+                        )
+                        .order_by(DocumentChunk.unit, DocumentChunk.ordinal)
+                        .offset(offset)
+                        .limit(1)
+                    )
+                    if chunk is None:
+                        continue
+                    sampled_pages.add((item["version_id"], chunk.unit))
+                    sources.append(
+                        Evidence(
+                            chunk.public_id,
+                            chunk.content,
+                            chunk.unit,
+                            {"kind": "page", "position": chunk.unit, "title": None, "path": []},
+                            document_id=UUID(item["document_id"]),
+                            version_id=item["version_id"],
+                        )
+                    )
+            return sources, {"sampled_pages": len(sampled_pages), "indexed_pages": total_pages}
 
     async def begin_call(self, public_id: UUID, fence: UUID, ordinal: int, kind: str) -> Any:
         async with self.sessions.begin() as session:
@@ -460,13 +576,44 @@ class SqlAgentRunStore:
         run.stage = stage
         self._close(run, status)
 
-    async def save_plan(self, public_id: UUID, fence: UUID, plan: TaskPlan) -> None:
+    async def save_plan(self, public_id: UUID, fence: UUID, plan: TaskPlan | GraphTaskPlan) -> None:
         async with self.sessions.begin() as session:
             run = await self._active(session, public_id, fence)
             check_run_budget(run.usage)
             message = await session.get(ConversationMessage, run.message_id)
             assert message is not None
             run.plan = plan.model_dump()
+            if isinstance(plan, GraphTaskPlan):
+                conversation = await session.scalar(
+                    select(Conversation)
+                    .where(
+                        Conversation.id == run.conversation_id,
+                        Conversation.workspace_id == run.workspace_id,
+                    )
+                    .with_for_update()
+                )
+                assert conversation is not None
+                if plan.memory_summary and conversation.scope == run.scope:
+                    conversation.memory = {
+                        "version": "conversation-memory-v1",
+                        "scope": run.scope,
+                        "summary": plan.memory_summary,
+                    }
+                if plan.clarification is not None:
+                    run.clarification = plan.clarification
+                    message.task_result = {"kind": "clarification", "text": plan.clarification}
+                    message.status = "answered"
+                    await self._advance(
+                        session,
+                        run,
+                        "clarify",
+                        "completed" if run.stage == "replan" else "waiting_input",
+                    )
+                else:
+                    await self._advance(session, run, plan.steps[0], "queued")
+                    if message.status == "answered":
+                        message.task_result, message.status = None, "queued"
+                return
             if plan.action == "clarify":
                 run.clarification = plan.message
                 message.task_result = {"kind": "clarification", "text": plan.message}
@@ -498,7 +645,12 @@ class SqlAgentRunStore:
                 run.quiz_reserved = True
 
     async def publish_summary(
-        self, public_id: UUID, fence: UUID, answer: dict[str, Any], usage: dict[str, Any]
+        self,
+        public_id: UUID,
+        fence: UUID,
+        answer: dict[str, Any],
+        usage: dict[str, Any],
+        coverage: dict[str, int] | None = None,
     ) -> None:
         async with self.sessions.begin() as session:
             run = await self._active(session, public_id, fence)
@@ -514,14 +666,51 @@ class SqlAgentRunStore:
                     "kind": "summary",
                     "message_id": str(message.public_id),
                     "text": "资料依据不足" if answer["insufficient_evidence"] else "已完成资料总结",
+                    **({"coverage": coverage} if coverage else {}),
                 },
             ]
+            if run.graph_version == GRAPH_VERSION:
+                steps = (run.plan or {}).get("steps", [])
+                current = steps.index("summary")
+                next_step = steps[current + 1] if current + 1 < len(steps) else "done"
+                if answer["insufficient_evidence"]:
+                    next_step = "done"
+                await self._advance(
+                    session, run, next_step, "completed" if next_step == "done" else "queued"
+                )
+                return
             study = (run.plan or {}).get("action") == "study"
             await self._advance(
                 session,
                 run,
                 "quiz" if study else "done",
                 "queued" if study and not answer["insufficient_evidence"] else "completed",
+            )
+
+    async def publish_pdf(self, public_id: UUID, fence: UUID) -> None:
+        """Publish a downloadable rendering of the already validated, persisted answer."""
+        async with self.sessions.begin() as session:
+            run = await self._active(session, public_id, fence)
+            if run.graph_version != GRAPH_VERSION or run.stage != "pdf":
+                raise RagFailure("TASK_PLAN_INVALID", "PDF 阶段不可用")
+            message = await session.get(ConversationMessage, run.message_id)
+            assert message is not None
+            if not message.answer or message.answer.get("insufficient_evidence"):
+                raise RagFailure("ANSWER_INVALID", "没有可导出的资料总结")
+            run.outputs = [
+                *run.outputs,
+                {
+                    "kind": "pdf",
+                    "message_id": str(message.public_id),
+                    "export_version": PDF_EXPORT_VERSION,
+                    "text": "知识点 PDF 已准备好",
+                },
+            ]
+            steps = (run.plan or {}).get("steps", [])
+            current = steps.index("pdf")
+            next_step = steps[current + 1] if current + 1 < len(steps) else "done"
+            await self._advance(
+                session, run, next_step, "completed" if next_step == "done" else "queued"
             )
 
     async def publish_quiz(
@@ -589,13 +778,21 @@ class SqlAgentRunStore:
             run.outputs = [*run.outputs, output]
             message = await session.get(ConversationMessage, run.message_id)
             assert message is not None
-            study = (run.plan or {}).get("action") == "study"
+            if run.graph_version == GRAPH_VERSION:
+                steps = (run.plan or {}).get("steps", [])
+                study = steps[0] != "quiz"
+            else:
+                study = (run.plan or {}).get("action") == "study"
             if not study:
                 message.task_result, message.quiz_id, message.usage = output, quiz.id, usage
             message.status, message.fence, message.lease_until = "answered", None, None
             # A weak-topic Quiz is the final output; never recursively schedule more practice.
             wait = (
-                study and run.stage == "quiz" and (run.plan or {}).get("review_after_submit", False)
+                run.stage == "quiz" and "review" in (run.plan or {}).get("steps", [])
+                if run.graph_version == GRAPH_VERSION
+                else study
+                and run.stage == "quiz"
+                and (run.plan or {}).get("review_after_submit", False)
             )
             if wait:
                 run.quiz_id, run.attempt_id = quiz.id, attempt.id
@@ -675,11 +872,19 @@ class SqlAgentRunStore:
                     "kind": "clarification",
                     "text": "当前资料范围还没有已完成练习，请先生成 Quiz 并提交作答。",
                 }
-            if plan.get("action") != "study":
+                run.outputs = [*run.outputs, output]
+            if run.graph_version == GRAPH_VERSION:
+                standalone = plan.get("steps", ["review"])[0] == "review"
+            else:
+                standalone = plan.get("action") != "study"
+            if standalone:
                 message.task_result = output
                 message.status, message.fence, message.lease_until = "answered", None, None
-            practice = plan.get("action") == "practice_weak_topics" or plan.get(
-                "practice_after_review"
+            practice = (
+                "practice" in plan.get("steps", [])
+                if run.graph_version == GRAPH_VERSION
+                else plan.get("action") == "practice_weak_topics"
+                or plan.get("practice_after_review")
             )
             if practice and review and review["weak_topics"]:
                 plan = {**plan, "weak_topics": review["weak_topics"]}

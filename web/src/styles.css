@@ -820,7 +820,24 @@ summary:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; bo
 .agent-conversation .learning-message:first-child { padding-top: 0; }
 .agent-composer .agent-scope { margin: 0; border: 0; }
 .agent-composer .agent-scope > summary { width: max-content; max-width: 100%; min-height: 30px; padding: 3px 0; color: var(--text-soft); font-size: 12px; font-weight: 550; }
-.agent-composer .agent-scope[open] { max-height: min(38dvh, 300px); overflow-y: auto; }
+.agent-conversation .agent-composer { position: relative; display: block; padding: 10px 0 max(8px, env(safe-area-inset-bottom)); border-top: 0; }
+.agent-composer__shell { padding: 10px 12px 8px; border: 1px solid var(--line-strong); border-radius: 16px; background: var(--surface); box-shadow: var(--shadow-sm); transition: border-color 160ms ease, box-shadow 160ms ease; }
+.agent-composer__shell:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.agent-composer__shell textarea { display: block; width: 100%; min-height: 46px; max-height: 160px; padding: 4px 2px; resize: none; overflow-y: auto; border: 0; outline: 0; background: transparent; box-shadow: none; font: inherit; line-height: 1.5; }
+.agent-conversation .agent-composer-footer { display: flex; align-items: end; justify-content: space-between; gap: 10px; }
+.agent-composer .agent-scope > summary { min-height: 44px; padding: 12px 10px; border-radius: 8px; }
+.agent-composer .agent-scope > summary:hover { background: var(--surface-soft); color: var(--text); }
+.agent-composer .agent-scope[open] { overflow: visible; max-height: none; }
+.agent-scope__panel { position: absolute; z-index: 30; bottom: calc(100% + 8px); left: 0; width: min(430px, 100%); max-height: min(50dvh, 400px); overflow-y: auto; padding: 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); box-shadow: var(--shadow-lg); }
+.agent-composer__action { display: grid; place-items: center; flex: 0 0 44px; width: 44px; height: 44px; padding: 0; border: 0; border-radius: 50%; background: var(--text); color: var(--surface); cursor: pointer; transition: transform 150ms ease, background 150ms ease; }
+.agent-composer__action:hover:not(:disabled) { transform: translateY(-1px); background: var(--accent-strong); }
+.agent-composer__action:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
+.agent-composer__action:disabled { opacity: .4; cursor: default; }
+.agent-composer__action svg { width: 18px; height: 18px; }
+.agent-run-card__pdf { display: inline-flex; align-items: center; min-height: 36px; margin: 6px 0; padding: 7px 12px; border: 1px solid var(--line-strong); border-radius: 8px; color: var(--accent-strong); font-size: 13px; font-weight: 650; text-decoration: none; }
+.agent-run-card__pdf:hover { background: var(--accent-soft); }
+.agent-run-card__pdf:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+.agent-run-card__coverage { margin: 4px 0; color: var(--text-soft); font-size: 12px; }
 .study-source-panel { display: flex; min-width: 0; min-height: 0; flex-direction: column; grid-column: 3; grid-row: 1; border-left: 1px solid var(--line); background: var(--surface); }
 .study-source-panel__header { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 56px; padding: 6px 10px 8px 16px; border-bottom: 1px solid var(--line); }
 .study-source-panel__header > div { min-width: 0; }

@@ -6,7 +6,8 @@ from uuid import uuid4
 
 import pytest
 
-from app.learning.run_application import RecordedCalls
+from app.learning.application import LearningModel
+from app.learning.run_application import RecordedCalls, RecordedModels
 from app.learning.workflow import AgentRunPersistence
 from app.rag.domain import RagFailure
 
@@ -31,6 +32,20 @@ def test_returned_call_receipt_recovers_without_another_billed_request() -> None
     result = asyncio.run(calls.invoke("plan_task", provider))
     assert result[0]["action"] == "answer"
     provider.assert_not_awaited()
+    store.finish_call.assert_not_awaited()
+
+
+def test_old_answer_receipt_replays_into_new_study_path_without_rebilling() -> None:
+    store = AsyncMock(spec=AgentRunPersistence)
+    old_answer = ({"insufficient_evidence": True, "claims": []}, {"prompt_tokens": 20})
+    store.begin_call.return_value = old_answer
+    model = AsyncMock(spec=LearningModel)
+    result = asyncio.run(
+        RecordedModels(model, RecordedCalls(store, uuid4(), uuid4())).answer_study("Question", [])
+    )
+    assert result == old_answer
+    assert store.begin_call.call_args.args[-1] == "answer"
+    model.answer_study.assert_not_awaited()
     store.finish_call.assert_not_awaited()
 
 

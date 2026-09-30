@@ -8,6 +8,7 @@ from uuid import UUID
 DIMENSIONS = 1024
 CHUNK_VERSION = "source-window-1500-180-v1"
 PROMPT_VERSION = "cited-claims-v1"
+STUDY_PROMPT_VERSION = "pdf-knowledge-explanation-v1"
 RETRIEVAL_VERSION = "exact-cosine-fts-rrf-v1"
 
 
@@ -130,3 +131,21 @@ def validate_answer(payload: dict[str, Any], sources: list[Evidence]) -> dict[st
             )
         validated.append({"text": text.strip(), "citations": checked})
     return {"insufficient_evidence": False, "claims": validated}
+
+
+def validate_study_answer(
+    payload: dict[str, Any], sources: list[Evidence], *, require_explanation: bool = False
+) -> dict[str, Any]:
+    """Keep PDF knowledge points cited while allowing a separate teaching explanation."""
+    answer = validate_answer(payload, sources)
+    if answer["insufficient_evidence"]:
+        return answer
+    explanation = payload.get("explanation")
+    if explanation is None:
+        # Results from an older in-flight model call still have cited claims only.
+        if require_explanation:
+            raise RagFailure("ANSWER_INVALID", "讲解内容缺失，请重试")
+        return answer
+    if not isinstance(explanation, str) or not 1 <= len(explanation.strip()) <= 4000:
+        raise RagFailure("ANSWER_INVALID", "讲解内容格式错误，请重试")
+    return {**answer, "explanation": explanation.strip()}

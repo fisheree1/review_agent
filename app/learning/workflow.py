@@ -5,13 +5,15 @@ from __future__ import annotations
 from typing import Any, Protocol
 from uuid import UUID
 
-from app.learning.agent import AgentBudget, PlanningModel, RunCheck, SourceSearch
+from app.learning.agent import AgentBudget, RunCheck, SourceSearch, StudyPlanningModel
 from app.learning.conversation_tasks import TaskPlan
+from app.learning.graph_tasks import GraphTaskPlan
 from app.learning.quiz_agent import QuizPlanningModel
 from app.rag.domain import Evidence
 from app.rag.ports import Embeddings
 
-GRAPH_VERSION = "study-graph-v1"
+LEGACY_GRAPH_VERSION = "study-graph-v1"
+GRAPH_VERSION = "study-graph-v2"
 TERMINAL_STATUSES = frozenset({"completed", "failed", "cancelled", "expired"})
 MAX_RUN_CALLS = 22
 MAX_RUN_TOKENS = 54_000
@@ -26,7 +28,7 @@ class StudyExecutor(Protocol):
         history: list[dict[str, str]],
         *,
         embeddings: Embeddings,
-        model: PlanningModel,
+        model: StudyPlanningModel,
         search: SourceSearch,
         ensure_active: RunCheck,
         budget: AgentBudget,
@@ -50,16 +52,27 @@ class AgentRunPersistence(Protocol):
     async def sources(
         self, public_id: UUID, fence: UUID, vector: list[float], query: str
     ) -> list[Evidence]: ...
+    async def overview_sources(
+        self, public_id: UUID, fence: UUID
+    ) -> tuple[list[Evidence], dict[str, int]]: ...
     async def begin_call(self, public_id: UUID, fence: UUID, ordinal: int, kind: str) -> Any: ...
     async def finish_call(
         self, public_id: UUID, fence: UUID, ordinal: int, result: Any, usage: dict[str, Any]
     ) -> None: ...
     async def reject_call(self, public_id: UUID, fence: UUID, ordinal: int) -> None: ...
-    async def save_plan(self, public_id: UUID, fence: UUID, plan: TaskPlan) -> None: ...
+    async def save_plan(
+        self, public_id: UUID, fence: UUID, plan: TaskPlan | GraphTaskPlan
+    ) -> None: ...
     async def reserve_quiz(self, public_id: UUID, fence: UUID) -> None: ...
     async def publish_summary(
-        self, public_id: UUID, fence: UUID, answer: dict[str, Any], usage: dict[str, Any]
+        self,
+        public_id: UUID,
+        fence: UUID,
+        answer: dict[str, Any],
+        usage: dict[str, Any],
+        coverage: dict[str, int] | None = None,
     ) -> None: ...
+    async def publish_pdf(self, public_id: UUID, fence: UUID) -> None: ...
     async def publish_quiz(
         self,
         public_id: UUID,

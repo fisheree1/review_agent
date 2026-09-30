@@ -35,7 +35,7 @@ export interface ConversationMessage {
   question: string;
   status: "queued" | "processing" | "answered" | "insufficient" | "failed" | "cancelled";
   scope: ScopeDocument[];
-  answer: { insufficient_evidence: boolean; claims: { text: string; citations: Citation[] }[] } | null;
+  answer: { insufficient_evidence: boolean; claims: { text: string; citations: Citation[] }[]; explanation?: string | null } | null;
   task_result?: {
     kind: "quiz" | "review" | "clarification";
     text: string;
@@ -149,8 +149,8 @@ export interface AgentRun {
   stage: string;
   revision: number;
   scope: ScopeDocument[];
-  plan: { action: string; summary_request?: string; review_after_submit?: boolean; practice_after_review?: boolean } | null;
-  outputs: { kind: "summary" | "quiz" | "review" | "notice"; quiz_id?: string; attempt_id?: string; text: string; title?: string }[];
+  plan: { action?: string; steps?: string[]; summary_request?: string; review_after_submit?: boolean; practice_after_review?: boolean } | null;
+  outputs: { kind: "summary" | "pdf" | "quiz" | "review" | "notice" | "clarification"; quiz_id?: string; attempt_id?: string; text: string; title?: string; coverage?: { sampled_pages: number; indexed_pages: number } }[];
   clarification: string | null;
   failure_message: string | null;
   expires_at: string;

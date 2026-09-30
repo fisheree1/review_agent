@@ -2,7 +2,7 @@
 
 版本：0.1
 数据库：PostgreSQL 17 + pgvector
-状态：`0001`–`0007` 建立最小权限、资料摄取与统一引用定位；`0008_cited_rag` 增加版本化索引、1024 维分块和单资料问答任务；`0009_learning_core` 增加集合、连续对话、反馈、Quiz 与作答；`0010_user_auth` 增加正式账号、成员、密码哈希与服务端会话；`0011_version_purge_trigger` 修正来源版本删除的清理触发条件；`0012_quiz_agent_usage` 增加私有生成用量审计；`0013_conversation_tasks` 增加对话任务结果与同空间 Quiz 关联；`0014_agent_workflows` 增加组合学习运行、调用回执与作答修订保护；`0015_learning_organization` 增加对话分组、创建幂等键和个人学习打卡。
+状态：`0001`–`0007` 建立最小权限、资料摄取与统一引用定位；`0008_cited_rag` 增加版本化索引、1024 维分块和单资料问答任务；`0009_learning_core` 增加集合、连续对话、反馈、Quiz 与作答；`0010_user_auth` 增加正式账号、成员、密码哈希与服务端会话；`0011_version_purge_trigger` 修正来源版本删除的清理触发条件；`0012_quiz_agent_usage` 增加私有生成用量审计；`0013_conversation_tasks` 增加对话任务结果与同空间 Quiz 关联；`0014_agent_workflows` 增加组合学习运行、调用回执与作答修订保护；`0015_learning_organization` 增加对话分组、创建幂等键和个人学习打卡；`0016_conversation_memory` 增加可空的会话提示投影。
 
 ## 当前 RAG 实现与目标设计的差异
 
@@ -174,7 +174,7 @@ Embedding 维度不能模糊配置后直接上线。首个模型确定后固定 
 
 ### 5.4 集合、对话与引用（`0009`）
 
-`collections` 保存工作区内资料集合，`collection_documents` 使用复合外键约束集合和资料同属工作区。`conversations` 保存标题和当前范围快照；`conversation_messages` 各自保存提问时的范围、状态、校验后的回答和受限的模型用量信息。`answer_feedback` 对已完成消息保存单条反馈与幂等键。
+`collections` 保存工作区内资料集合，`collection_documents` 使用复合外键约束集合和资料同属工作区。`conversations` 保存标题和当前范围快照；`0016` 新增可空的 `memory` JSONB，内容限于版本号、完整资料版本范围和最多 700 字的对话提示。只有范围完全一致才读取，旧行无需回填，删除对话时一同清理。`conversation_messages` 各自保存提问时的范围、状态、校验后的回答和受限的模型用量信息。`answer_feedback` 对已完成消息保存单条反馈与幂等键。
 
 `0015` 的 `conversation_groups` 是组织历史对话的工作区内分组，与资料集合不同。`conversations.group_id` 可空，并以 `(group_id, workspace_id)` 复合外键约束同空间归属；删除分组只把对话移至未分组。删除对话会级联清理消息、反馈与关联的 Agent 运行；独立 Quiz 仍属于原工作区。`conversations.create_key` 是可空的创建幂等键，在工作区内唯一；`create_request` 只保存标题和所选资料/集合 ID 以识别同键不同请求，旧对话无需回填。新建对话可暂时没有资料范围，发送前必须先选定可用资料。历史列表用 `(workspace_id, updated_at DESC, id DESC)` 游标索引分页。
 
@@ -192,7 +192,7 @@ Quiz 保存工作区、标题、生成配置、原始请求范围、解析版本
 
 `0013_conversation_tasks` 为 `conversation_messages` 增加可空 `task_result` JSONB 和 `quiz_id`。结果保存类型、说明和公开资源 ID，不复制答案/解析；正文仍遵守学习记录隐私和删除策略。复合外键 `(quiz_id, workspace_id)` 指向 Quiz 所有权，禁止跨空间引用，删除 Quiz 时级联删除相关消息；`(workspace_id, quiz_id)` 索引支持引用清理。旧消息的新增字段保持 NULL，无回填。消息、已校验题目、Quiz 与用量在同一短事务内发布；模型/向量调用在事务外。复习查询按空间和精确范围限制已提交作答。
 
-组合学习 Agent 首次部署需先迁移至 `0014`；`0013` 是它的前一兼容基线。本地 `0015` 对话组织与打卡也须先迁移再启用对应代码，线上是否已升级以[部署记录](./deployment-fisher-ai.md)为准。应用回退保留兼容字段，停止新任务并等待在途任务结束；生产不使用会丢弃任务结果的 downgrade。隔离空库与上一 schema 的升级均须检查保留数据、Alembic 元数据和跨空间外键。
+组合学习 Agent 首次部署需先迁移至 `0014`；`0013` 是它的前一兼容基线。对话组织、打卡和新会话提示分别需 `0015`、`0016`。`0016` 仅加可空列，先迁移再启用新代码；旧代码可忽略该列，回退应用时保留它。线上是否已升级以[部署记录](./deployment-fisher-ai.md)为准。应用回退时停止新任务并等待在途任务结束；生产不使用会丢弃任务结果的 downgrade。隔离空库与上一 schema 的升级均须检查保留数据、Alembic 元数据和跨空间外键。
 
 #### `quiz_questions`
 

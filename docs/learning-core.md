@@ -47,4 +47,6 @@ Worker 路由按版本化 schema 校验；一条请求执行一项任务，混�
 
 新消息含可选 `run_id`。新增 `GET /api/v1/conversations/{conversation_id}/agent-runs?cursor=0&limit=30`、`GET /api/v1/agent-runs/{id}`、`POST /api/v1/agent-runs/{id}:cancel`、`POST /api/v1/agent-runs/{id}:respond`。澄清使用 `Idempotency-Key` 和 `{answer, expected_revision}`；只接受等待澄清的运行，跨 workspace 为 404，陈旧修订为 409。运行响应只含公开阶段、范围、成果及稳定错误，不包含调用回执。
 
+`study-graph-v2` 的计划是有顺序和上限的 `summary/pdf/quiz/review/practice` 步骤清单。只有当前用户请求可触发 PDF 或出题；作答复习只读取同工作区同资料版本范围的真实提交。`conversations.memory` 保存同范围最多 700 字的对话提示，不作为事实证据。学习 Agent 回答先从所选 PDF 提取可引用知识点，再用模型通用知识展开讲解，正文不标注哪些内容属于原文；无相关资料知识点时仍返回证据不足。单资料阅读页问答继续只依据检索证据。`GET /api/v1/agent-runs/{id}/notes.pdf` 对已发布 PDF 成果重新执行工作区和来源版本检查，再从已校验知识点和讲解即时生成私有 PDF；页面整理的抽样覆盖记录在运行成果中。原 `study-graph-v1` 在途运行仍可恢复。
+
 作答保存增加可选 `expected_revision`，返回 `{question_id,response,revision}`；冲突为 `ANSWER_REVISION_CONFLICT`。相同已保存值允许丢失确认后的重放。含简答的组合任务由 Agent Worker 评分，真实评分完成后排队 review；停止的组合任务不可用旧重新评分入口恢复，可开始新作答。版本化图与兼容开关详见 [开发设计](./agent-workflow-development.md#12-本次交付与设计调整)。

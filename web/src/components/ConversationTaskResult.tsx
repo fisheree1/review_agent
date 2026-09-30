@@ -41,7 +41,7 @@ export function ConversationTaskResult({ message, onRequest }: {
   message: ConversationMessage; onRequest: (request: string) => void;
 }) {
   const result = message.task_result;
-  if (!result || message.status !== "answered") return null;
+  if (!result || message.status !== "answered" || message.run_id) return null;
   return <section className="agent-task-result" aria-label={result.kind === "quiz" ? "练习任务结果" : result.kind === "review" ? "错题复习结果" : "任务说明"}>
     <span className="eyebrow">{result.kind === "quiz" ? "练习已准备" : result.kind === "review" ? "作答复习" : "需要补充"}</span>
     {result.title ? <h4>{result.title}</h4> : null}

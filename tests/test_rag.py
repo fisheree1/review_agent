@@ -19,6 +19,7 @@ from app.rag.domain import (
     Task,
     split_content,
     validate_answer,
+    validate_study_answer,
     validate_vectors,
 )
 from app.rag.ports import RagStore
@@ -58,6 +59,73 @@ def test_citations_reject_fabricated_source_and_nonverbatim_quote() -> None:
     with pytest.raises(RagFailure):
         validate_answer(payload, [source])
     assert validate_answer({"insufficient_evidence": True}, [source])["claims"] == []
+
+
+def test_study_explanation_keeps_pdf_points_cited_and_refuses_missing_sources() -> None:
+    source = Evidence(uuid4(), "The median resists extreme outliers.", 3, {"kind": "page"})
+    payload = {
+        "insufficient_evidence": False,
+        "claims": [
+            {
+                "text": "The median resists outliers.",
+                "citations": [{"source_id": str(source.id), "quote": source.content}],
+            }
+        ],
+        "explanation": "  Sort the values first; the middle position determines the median.  ",
+    }
+    answer = validate_study_answer(payload, [source])
+    assert answer["explanation"] == (
+        "Sort the values first; the middle position determines the median."
+    )
+    assert "explanation" not in validate_answer(payload, [source])
+    with pytest.raises(RagFailure):
+        validate_study_answer(payload, [])
+    with pytest.raises(RagFailure):
+        validate_study_answer({**payload, "explanation": " "}, [source])
+    with pytest.raises(RagFailure):
+        validate_study_answer(
+            {"insufficient_evidence": False, "claims": payload["claims"]},
+            [source],
+            require_explanation=True,
+        )
+    assert validate_study_answer({**payload, "insufficient_evidence": True}, []) == {
+        "insufficient_evidence": True,
+        "claims": [],
+    }
+
+
+def test_study_generation_allows_general_explanation_without_changing_reader_rag() -> None:
+    prompts: list[str] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        prompts.append(body["messages"][0]["content"])
+        return httpx.Response(
+            200,
+            json={
+                "model": "test",
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "message": {
+                            "content": json.dumps({"insufficient_evidence": True, "claims": []})
+                        },
+                    }
+                ],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+            },
+        )
+
+    async def check() -> None:
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
+            provider = CloudModels(ModelSettings(deepseek_api_key=SecretStr("test-only")), client)
+            _, study_usage = await provider.answer_study("Explain the PDF", [])
+            _, reader_usage = await provider.answer("Explain the PDF", [])
+            assert study_usage["prompt_version"] != reader_usage["prompt_version"]
+
+    asyncio.run(check())
+    assert "You may use general knowledge" in prompts[0]
+    assert "Do not use outside knowledge" in prompts[1]
 
 
 @pytest.mark.parametrize("vector", [[0.0] * 1024, [1.0] * 512, [float("nan")] * 1024])
