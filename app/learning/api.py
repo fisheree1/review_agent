@@ -16,7 +16,7 @@ from app.learning.application import LearningService
 from app.learning.pdf_export import render_study_pdf
 from app.learning.run_store import SqlAgentRunStore
 from app.learning.store import SqlLearningStore
-from app.rag.api import AnswerResponse
+from app.rag.api import ClaimResponse
 
 router = APIRouter(prefix="/api/v1", tags=["learning"])
 
@@ -86,7 +86,14 @@ class TaskResultResponse(BaseModel):
     title: str | None = None
 
 
-class StudyAnswerResponse(AnswerResponse):
+class StudyClaimResponse(ClaimResponse):
+    title: str | None = None
+    explanation: str | None = None
+
+
+class StudyAnswerResponse(BaseModel):
+    insufficient_evidence: bool
+    claims: list[StudyClaimResponse]
     explanation: str | None = None
 
 

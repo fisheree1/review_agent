@@ -13,12 +13,17 @@ from app.rag.domain import Evidence
 from app.rag.ports import Embeddings
 
 LEGACY_GRAPH_VERSION = "study-graph-v1"
-GRAPH_VERSION = "study-graph-v2"
+GRAPH_VERSION = "study-graph-v4"
+FAST_GRAPH_VERSIONS = ("study-graph-v3", GRAPH_VERSION)
+PLANNED_GRAPH_VERSION = "study-graph-v2"
+COMPOSABLE_GRAPH_VERSIONS = (PLANNED_GRAPH_VERSION, *FAST_GRAPH_VERSIONS)
+SUPPORTED_GRAPH_VERSIONS = (LEGACY_GRAPH_VERSION, *COMPOSABLE_GRAPH_VERSIONS)
 TERMINAL_STATUSES = frozenset({"completed", "failed", "cancelled", "expired"})
 MAX_RUN_CALLS = 22
 MAX_RUN_TOKENS = 54_000
 MAX_RUN_COST_UNITS = 90_000
 MAX_RUN_SECONDS = 770
+MAX_OVERVIEW_RUN_SECONDS = 1540
 
 
 class StudyExecutor(Protocol):
@@ -53,6 +58,9 @@ class AgentRunPersistence(Protocol):
         self, public_id: UUID, fence: UUID, vector: list[float], query: str
     ) -> list[Evidence]: ...
     async def overview_sources(
+        self, public_id: UUID, fence: UUID
+    ) -> tuple[list[Evidence], dict[str, int]]: ...
+    async def overview_batch(
         self, public_id: UUID, fence: UUID
     ) -> tuple[list[Evidence], dict[str, int]]: ...
     async def begin_call(self, public_id: UUID, fence: UUID, ordinal: int, kind: str) -> Any: ...
@@ -95,13 +103,17 @@ class AgentRunPersistence(Protocol):
     async def record_duration(self, public_id: UUID, seconds: float) -> None: ...
 
 
-def check_run_budget(usage: dict[str, Any]) -> None:
+def run_seconds_limit(graph_version: str | None) -> int:
+    return MAX_OVERVIEW_RUN_SECONDS if graph_version == GRAPH_VERSION else MAX_RUN_SECONDS
+
+
+def check_run_budget(usage: dict[str, Any], graph_version: str | None = None) -> None:
     from app.rag.domain import RagFailure
 
     if (
         usage.get("model_calls", 0) > MAX_RUN_CALLS
         or usage.get("prompt_tokens", 0) + usage.get("completion_tokens", 0) > MAX_RUN_TOKENS
         or usage.get("cost_units", 0) > MAX_RUN_COST_UNITS
-        or usage.get("execution_seconds", 0) > MAX_RUN_SECONDS
+        or usage.get("execution_seconds", 0) > run_seconds_limit(graph_version)
     ):
         raise RagFailure("RUN_BUDGET_EXCEEDED", "学习任务已达到累计预算")

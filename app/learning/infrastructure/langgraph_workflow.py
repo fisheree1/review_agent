@@ -23,7 +23,7 @@ from app.learning.agent import (
 )
 from app.learning.domain import validate_candidates
 from app.learning.quiz_agent import QuizPlanningModel
-from app.learning.workflow import GRAPH_VERSION
+from app.learning.workflow import PLANNED_GRAPH_VERSION
 from app.rag.domain import (
     STUDY_PROMPT_VERSION,
     Evidence,
@@ -159,7 +159,7 @@ class LangGraphStudyExecutor:
                 result: Any = validate_study_answer(
                     state["payload"],
                     sources,
-                    require_explanation=state["last_usage"].get("prompt_version")
+                    require_sections=state["last_usage"].get("prompt_version")
                     == STUDY_PROMPT_VERSION,
                 )
             else:
@@ -213,7 +213,7 @@ class LangGraphStudyExecutor:
             planning_prompt_version=state["planning_prompt_version"],
             trace=state["trace"],
         )
-        return state["result"], {**usage, "graph_version": GRAPH_VERSION}
+        return state["result"], {**usage, "graph_version": PLANNED_GRAPH_VERSION}
 
     async def answer(
         self,

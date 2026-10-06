@@ -180,7 +180,7 @@ async def run_scoped_agent(
     answer = validate_study_answer(
         payload,
         plan.sources,
-        require_explanation=usage.get("prompt_version") == STUDY_PROMPT_VERSION,
+        require_sections=usage.get("prompt_version") == STUDY_PROMPT_VERSION,
     )
     plan.trace.append({"tool": "answer", "insufficient_evidence": answer["insufficient_evidence"]})
     return answer, plan.usage(usage, AGENT_VERSION)

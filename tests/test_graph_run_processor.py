@@ -61,7 +61,7 @@ def test_graph_planner_uses_same_scope_memory_and_validates_composable_steps() -
     store.publish_pdf.assert_not_awaited()
 
 
-def test_overview_summary_validates_quote_before_publication() -> None:
+def test_legacy_overview_summary_validates_quote_before_publication() -> None:
     worker, store, model = setup("summary", {"summary_mode": "overview"})
     source = Evidence(
         uuid4(),
@@ -71,6 +71,7 @@ def test_overview_summary_validates_quote_before_publication() -> None:
         document_id=uuid4(),
         version_id=1,
     )
+    store.claim.return_value["graph_version"] = "study-graph-v3"
     store.overview_sources.return_value = ([source], {"sampled_pages": 1, "indexed_pages": 44})
     model.answer_study.return_value = (
         {
@@ -85,7 +86,7 @@ def test_overview_summary_validates_quote_before_publication() -> None:
                 "A median is the middle value after sorting, so extremes have less influence."
             ),
         },
-        {**USAGE, "prompt_version": STUDY_PROMPT_VERSION},
+        {**USAGE, "prompt_version": "pdf-knowledge-explanation-v1"},
     )
     asyncio.run(worker.process_next())
     answer = store.publish_summary.call_args.args[2]
@@ -97,6 +98,7 @@ def test_overview_summary_validates_quote_before_publication() -> None:
         "indexed_pages": 44,
     }
     worker, store, model = setup("summary", {"summary_mode": "overview"})
+    store.claim.return_value["graph_version"] = "study-graph-v3"
     store.overview_sources.return_value = ([source], {"sampled_pages": 1, "indexed_pages": 44})
     model.answer_study.return_value = (
         {
@@ -115,8 +117,9 @@ def test_overview_summary_validates_quote_before_publication() -> None:
     store.fail.assert_awaited_once()
 
 
-def test_focused_question_keeps_relevance_retrieval_path() -> None:
+def test_v2_focused_question_keeps_receipt_compatible_execution() -> None:
     worker, store, _ = setup("summary", {"summary_mode": "focused"})
+    store.claim.return_value["graph_version"] = "study-graph-v2"
     worker.executor.answer.return_value = ({"insufficient_evidence": True, "claims": []}, USAGE)
     asyncio.run(worker.process_next())
     worker.executor.answer.assert_awaited_once()
@@ -129,3 +132,60 @@ def test_pdf_stage_publishes_only_persisted_summary() -> None:
     asyncio.run(worker.process_next())
     store.publish_pdf.assert_awaited_once()
     model.answer_study.assert_not_awaited()
+
+
+def test_v3_focused_stage_bypasses_tool_planning_and_uses_recorded_calls() -> None:
+    worker, store, model = setup(
+        "summary", {"summary_mode": "focused", "summary_request": "Median"}
+    )
+    worker.embeddings.embed.return_value = [[1.0] + [0.0] * 1023]
+    store.sources.return_value = []
+    asyncio.run(worker.process_next())
+    worker.executor.answer.assert_not_awaited()
+    model.plan_step.assert_not_awaited()
+    store.publish_summary.assert_awaited_once()
+    assert store.begin_call.call_args.args[3] == "embed"
+    assert store.publish_summary.call_args.args[3]["graph_version"] == GRAPH_VERSION
+
+
+def test_new_overview_processes_one_bounded_batch_and_keeps_its_citations() -> None:
+    worker, store, model = setup("overview_2", {"summary_mode": "overview"})
+    source = Evidence(
+        uuid4(),
+        "The median resists extreme values.",
+        120,
+        {"kind": "page", "position": 120},
+        document_id=uuid4(),
+        version_id=1,
+    )
+    coverage = {
+        "sampled_pages": 24,
+        "indexed_pages": 200,
+        "completed_batches": 3,
+        "total_batches": 8,
+        "processed_chunks": 24,
+        "indexed_chunks": 300,
+        "full_pages": 15,
+    }
+    store.overview_batch.return_value = ([source], coverage)
+    model.answer_study.return_value = (
+        {
+            "insufficient_evidence": False,
+            "claims": [
+                {
+                    "text": "Median is robust",
+                    "title": "Median",
+                    "explanation": "The middle value is less affected by extremes.",
+                    "citations": [{"source_id": str(source.id), "quote": source.content}],
+                }
+            ],
+            "explanation": "The middle value is less affected by extremes.",
+        },
+        {**USAGE, "prompt_version": STUDY_PROMPT_VERSION},
+    )
+    asyncio.run(worker.process_next())
+    store.fail.assert_not_awaited()
+    model.answer_study.assert_awaited_once()
+    store.overview_sources.assert_not_awaited()
+    assert store.publish_summary.call_args.args[2]["claims"][0]["citations"][0]["unit"] == 120
+    assert store.publish_summary.call_args.args[4] == coverage

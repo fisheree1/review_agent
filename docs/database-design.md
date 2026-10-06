@@ -296,3 +296,21 @@ RLS 不能替代应用授权；后台任务、迁移和管理员连接要明确�
 ## 12. 0014 学习工作流
 
 新增 `agent_runs` 与 `agent_stage_executions`，使用复合 workspace 外键和调用序号唯一约束；运行关联对话、触发消息及实际 Quiz/attempt。新增作答 revision 默认为 0，旧请求可不传期望修订，新页面强制使用修订保护。迁移只新增表/列/约束，旧记录保持兼容。运行/阶段/租约字段不作为公共 API；JSONB 返回结果是需清理的私有内容。迁移和运行凭据仍分离，框架不能运行建表 setup。详细恢复与保留期见 [ADR-0002](./adr/0002-agent-business-checkpoints.md)。
+
+## 0017：个人长期复习
+
+`review_cards` 保存 `(workspace_id,user_id,question_id)` 唯一的个人卡片，关联题目及工作区成员的复合外键；删除题目或成员时级联删除。字段含 `due_at`（UTC）、`stage`（0–6）、`interval_days`（0–120）、`revision`（同时作为已复习次数）、`lapses` 和 `policy_version=spaced-review-v1`。队列索引为 `(workspace_id,user_id,due_at,id)`，另有 `(question_id,workspace_id)` 支持来源清理。新卡片立即到期，重复加入不改变排程。
+
+`review_events` 以 `(workspace_id,user_id,idempotency_key)` 唯一，复合外键绑定同成员的卡片。保存自评、期望 revision 及仅含 ID/日期/间隔/修订的结果快照；网络重放返回首次结果，即使卡片后来再次复习也不改变。事件不复制题干、答案或原文。卡片与事件同事务写入。
+
+迁移仅新增表和索引，不回填、不修改旧作答归属。新表沿用迁移角色的默认授权，运行角色不拥有 schema。现有版本删除触发器经 Quiz → Question → ReviewCard → ReviewEvent 清理派生记录；正在删除的来源通过查询过滤即时隐藏。验证入口 `python -m scripts.verify_spaced_review --isolated`，增加 `--previous` 验证 0016 → 0017，必须指向预装 pgvector 的空临时数据库。
+
+
+## v4 长文整理进度（复用现有 schema）
+
+每批仍以 `(run_id,stage,ordinal)` 唯一的 `agent_stage_executions` 防止重复外部调用，批次名最多 overview_7，每批只有 ordinal=0。已验证的累积答案保存在所属消息 answer，累计用量与策略版本在 message.usage；单一 summary output 保存覆盖计数，run.stage 保存下一批位置。合并、覆盖更新、回执清理及运行重新排队原子提交。选样由固定版本策略与不可变索引确定，恢复时无需保存原文副本或重新读已发布模型结果。旧 run.graph_version 固定原执行方式。取消清除未发布回执，保留已验证内容；删除来源仍清除对应消息和运行。
+
+
+### 知识点讲解 JSON 兼容扩展
+
+`conversation_messages.answer.claims[]` 增加可选 `title` / `explanation`，随原有已校验知识点保存，读取时缺失按 NULL 处理；无新增表、列、索引或迁移，不回填旧回答。敏感内容与原消息使用同一工作区权限及来源删除级联，不复制原文或创建独立缓存。发布新 API / Web 后部署新 Worker，使响应能携带新字段；旧回执按其旧提示版本恢复，旧 Web 可以显示核心要点但不会展示新增逐点讲解。回退 Worker 会恢复生成旧结构，新 Web 保持兼容。

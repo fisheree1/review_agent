@@ -8,7 +8,7 @@ from uuid import UUID
 DIMENSIONS = 1024
 CHUNK_VERSION = "source-window-1500-180-v1"
 PROMPT_VERSION = "cited-claims-v1"
-STUDY_PROMPT_VERSION = "pdf-knowledge-explanation-v1"
+STUDY_PROMPT_VERSION = "pdf-knowledge-sections-v2"
 RETRIEVAL_VERSION = "exact-cosine-fts-rrf-v1"
 
 
@@ -134,12 +134,32 @@ def validate_answer(payload: dict[str, Any], sources: list[Evidence]) -> dict[st
 
 
 def validate_study_answer(
-    payload: dict[str, Any], sources: list[Evidence], *, require_explanation: bool = False
+    payload: dict[str, Any],
+    sources: list[Evidence],
+    *,
+    require_explanation: bool = False,
+    require_sections: bool = False,
 ) -> dict[str, Any]:
-    """Keep PDF knowledge points cited while allowing a separate teaching explanation."""
+    """Validate per-point teaching and sources while accepting historical flat answers."""
     answer = validate_answer(payload, sources)
     if answer["insufficient_evidence"]:
         return answer
+    section_length = 0
+    for raw, claim in zip(payload["claims"], answer["claims"], strict=True):
+        title, teaching = raw.get("title"), raw.get("explanation")
+        if title is None and teaching is None and not require_sections:
+            continue
+        if (
+            not isinstance(title, str)
+            or not 1 <= len(title.strip()) <= 120
+            or not isinstance(teaching, str)
+            or not 1 <= len(teaching.strip()) <= 4000
+        ):
+            raise RagFailure("ANSWER_INVALID", "知识点讲解格式错误，请重试")
+        section_length += len(teaching.strip())
+        claim.update(title=title.strip(), explanation=teaching.strip())
+    if section_length > 4000:
+        raise RagFailure("ANSWER_INVALID", "知识点讲解超出长度限制，请重试")
     explanation = payload.get("explanation")
     if explanation is None:
         # Results from an older in-flight model call still have cited claims only.

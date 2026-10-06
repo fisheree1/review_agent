@@ -49,10 +49,11 @@ def setup() -> tuple[Evidence, AsyncMock, AsyncMock, AsyncMock, AsyncMock]:
             "claims": [
                 {
                     "text": "Median resists outliers.",
+                    "title": "Median",
+                    "explanation": "An extreme value changes the mean more than the median.",
                     "citations": [{"source_id": str(source.id), "quote": source.content}],
                 }
             ],
-            "explanation": "An extreme value changes the mean more than the median.",
         },
         {**USAGE, "prompt_version": STUDY_PROMPT_VERSION},
     )
@@ -82,7 +83,10 @@ def test_graph_publishes_only_validated_scoped_citations() -> None:
     source, model, embeddings, search, active = setup()
     answer, usage = execute(model, embeddings, search, active)
     assert answer["claims"][0]["citations"][0]["document_id"] == str(source.document_id)
-    assert answer["explanation"] == "An extreme value changes the mean more than the median."
+    assert (
+        answer["claims"][0]["explanation"]
+        == "An extreme value changes the mean more than the median."
+    )
     assert usage["model_calls"] == 4 and usage["graph_version"] == "study-graph-v2"
     assert usage["planning_prompt_version"] == "test-planner-v1"
     assert model.answer_study.call_args.args[1] == [source]

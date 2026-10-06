@@ -375,3 +375,78 @@ def test_index_retry_only_embeds_unfinished_batch() -> None:
         store.finish_index.assert_awaited_once_with(task)
 
     asyncio.run(check())
+
+
+def test_knowledge_sections_resolve_pages_from_scoped_evidence_and_reject_invented_sources():
+    from app.learning.api import StudyAnswerResponse
+
+    source = Evidence(
+        uuid4(),
+        "The median resists extreme outliers.",
+        13,
+        {"kind": "page", "position": 13, "title": None, "path": []},
+        document_id=uuid4(),
+        version_id=2,
+    )
+    point = {
+        "title": " Median ",
+        "text": "Median resists outliers.",
+        "explanation": " Sort the values and select the middle one. ",
+        "citations": [{"source_id": str(source.id), "quote": source.content, "unit": 999}],
+    }
+    payload = {"insufficient_evidence": False, "claims": [point]}
+    answer = validate_study_answer(payload, [source], require_sections=True)
+    saved = StudyAnswerResponse.model_validate(answer).model_dump(mode="json")
+    assert saved["claims"][0]["title"] == "Median"
+    assert saved["claims"][0]["explanation"] == "Sort the values and select the middle one."
+    citation = saved["claims"][0]["citations"][0]
+    assert citation["unit"] == 13 and citation["version_id"] == 2
+    assert citation["document_id"] == str(source.document_id)
+    with pytest.raises(RagFailure):
+        validate_study_answer(payload, [], require_sections=True)
+    point["citations"][0]["source_id"] = str(uuid4())
+    with pytest.raises(RagFailure):
+        validate_study_answer(payload, [source], require_sections=True)
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {},
+        {"title": "Median"},
+        {"title": " ", "explanation": "Example"},
+        {"title": "Median", "explanation": " "},
+        {"title": "x" * 121, "explanation": "Example"},
+        {"title": "Median", "explanation": "x" * 4001},
+    ],
+)
+def test_new_study_schema_rejects_missing_or_unbounded_section_teaching(fields):
+    source = Evidence(uuid4(), "The median resists extreme outliers.", 1, {"kind": "page"})
+    payload = {
+        "insufficient_evidence": False,
+        "claims": [
+            {
+                "text": "Median",
+                "citations": [{"source_id": str(source.id), "quote": source.content}],
+                **fields,
+            }
+        ],
+    }
+    with pytest.raises(RagFailure):
+        validate_study_answer(payload, [source], require_sections=True)
+
+
+def test_section_teaching_budget_is_shared_across_points():
+    source = Evidence(uuid4(), "The median resists extreme outliers.", 1, {"kind": "page"})
+    point = {
+        "title": "Median",
+        "text": "Median",
+        "explanation": "x" * 2001,
+        "citations": [{"source_id": str(source.id), "quote": source.content}],
+    }
+    with pytest.raises(RagFailure):
+        validate_study_answer(
+            {"insufficient_evidence": False, "claims": [point, point]},
+            [source],
+            require_sections=True,
+        )

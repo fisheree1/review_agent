@@ -139,3 +139,14 @@ def test_pdf_download_is_revoked_when_source_version_changes(monkeypatch) -> Non
         session.get.assert_not_awaited()
 
     asyncio.run(scenario())
+
+
+def test_study_pdf_retains_each_knowledge_points_teaching():
+    title, answer, scope, coverage = material()
+    answer.pop("explanation")
+    answer["claims"][0].update(title="中位数与极端值", explanation="排序后选择中间位置。")
+    text = "\n".join(
+        page.extract_text()
+        for page in PdfReader(BytesIO(render_study_pdf(title, answer, scope, coverage))).pages
+    )
+    assert "中位数与极端值" in text and "排序后选择中间位置" in text

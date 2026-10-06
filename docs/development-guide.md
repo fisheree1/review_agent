@@ -200,3 +200,20 @@ React 前端位于 `web/`。服务端状态由 TanStack Query 管理，当前资
 ## 学习图开发与验证
 
 应用逻辑只依赖 `StudyExecutor`、`AgentRunPersistence`；LangGraph 与 SQLAlchemy 代码放在适配器，不向领域层导入。修改图/Prompt/计划需提升相应版本，未知版本运行进入阻塞。调用预算跨恢复累计，严禁自动重发未知请求；阶段成果与恢复位置同事务。运行角色不执行 saver setup，不开启包含原文的外部追踪。修改后的重点门禁为图单元、工作区隔离、PostgreSQL 恢复/删除、0013→0014 迁移及完整移动端流程，详见 [工作流设计](./agent-workflow-development.md#12-本次交付与设计调整)。
+
+### 快速问答与复习的验证
+
+- `pytest -q tests/test_focused_answer.py tests/test_graph_run_processor.py tests/test_agent_evaluation.py tests/test_spaced_review.py`：引用、证据不足、预算/取消、旧图兼容、生成调用数及评分规则/API。
+- `python -m scripts.verify_spaced_review --isolated [--previous]`：仅在预装 pgvector 的空临时库运行；验证空库或 0016 升级、元数据一致、个人/空间隔离、重复导入、同键重放、并发 revision、到期索引、成员与来源删除。
+- `pnpm --dir web test src/pages/ReviewPage.test.tsx`：答案隐藏、键盘展开、保留请求键的网络重试及加载/错误/空状态。
+- `pnpm --dir web exec playwright test e2e/spaced-review.spec.ts`：从错题导入到复习自评及刷新恢复，覆盖 390px 与 1280px。需先启动测试前端。
+
+
+### 长 PDF 覆盖验证
+
+`evals/overview-v1.json` 定义长文、极密首页、可完整读取短文三个覆盖案例，`tests/test_overview.py` 比较旧 15 片段选样与新策略的实际页覆盖，并验证多文档首批配额、批次上限及知识点合并。它衡量输入来源覆盖，不能替代真实模型的语义提取评估。
+
+`python -m scripts.verify_long_pdf_overview --isolated` 必须使用没有工作区的已迁移临时数据库。该脚本构造 72 页正文及越权/未选择资料，验证读取 64 页、8 次有界生成、跨空间隔离、调用结果回放、逐批合并、预算限制保留成果、取消及来源删除。模型为确定性 fixture，不调用外部付费服务。UI 验证使用 `AgentRunCard.test.tsx` 与 `e2e/long-pdf-overview.spec.ts`，覆盖窄屏进度和刷新恢复。
+
+
+知识点联动阅读的定向检查：后端 `tests/test_rag.py`、`test_focused_answer.py`、`test_langgraph_workflow.py`、`test_graph_run_processor.py`、`test_overview.py`、`test_study_pdf.py` 检查逐点结构、范围外来源拒绝、页码解析、旧回执、分批合并及导出；前端 `StudyPage.test.tsx`、`StudySourcePanel.test.tsx`、`PdfPreview.test.tsx` 与 `web/e2e/study-linked-reading.spec.ts` 检查历史兼容、预览失败恢复、跟随开关、跨资料切换、重复下载和 390px 键盘返回。浏览器使用合成 PDF，不调用真实模型；实际讲解质量仍需真实资料评估。

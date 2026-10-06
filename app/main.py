@@ -19,6 +19,7 @@ from app.documents.api import router as documents_router
 from app.jobs.models import WorkerHeartbeatModel
 from app.learning.api import router as learning_router
 from app.learning.organization_api import router as organization_router
+from app.learning.review_api import router as review_router
 from app.rag.api import router as rag_router
 
 settings = get_settings()
@@ -55,6 +56,7 @@ app.include_router(auth_router)
 app.include_router(rag_router)
 app.include_router(learning_router)
 app.include_router(organization_router)
+app.include_router(review_router)
 app.add_middleware(
     RequestBodyLimitMiddleware, path="/api/v1/conversation-groups", max_bytes=4096, prefix=True
 )

@@ -13,8 +13,16 @@ from app.core.errors import ApplicationError
 from app.learning.agent import AgentBudget
 from app.learning.application import LearningModel
 from app.learning.conversation_tasks import TASK_VERSION, validate_task_plan
+from app.learning.focused_answer import answer_focused
 from app.learning.graph_tasks import GRAPH_TASK_VERSION, validate_graph_task_plan
-from app.learning.workflow import GRAPH_VERSION, AgentRunPersistence, StudyExecutor
+from app.learning.overview import OVERVIEW_VERSION, overview_batch_index
+from app.learning.workflow import (
+    COMPOSABLE_GRAPH_VERSIONS,
+    FAST_GRAPH_VERSIONS,
+    GRAPH_VERSION,
+    AgentRunPersistence,
+    StudyExecutor,
+)
 from app.rag.domain import STUDY_PROMPT_VERSION, Evidence, RagFailure, validate_study_answer
 from app.rag.ports import Embeddings
 
@@ -213,7 +221,7 @@ class AgentRunProcessor:
                     if task["response"]:
                         request += "\n用户补充：" + task["response"]
                     review = await self.store.review(run_id, fence)
-                    if task["graph_version"] == GRAPH_VERSION:
+                    if task["graph_version"] in COMPOSABLE_GRAPH_VERSIONS:
                         payload, _usage = await models.plan_graph_task(
                             request,
                             history=task["history"],
@@ -226,10 +234,43 @@ class AgentRunProcessor:
                             request, history=task["history"], review_available=review is not None
                         )
                         await self.store.save_plan(run_id, fence, validate_task_plan(payload))
-                elif stage == "summary":
+                elif stage == "summary" or (
+                    task["graph_version"] == GRAPH_VERSION and stage.startswith("overview_")
+                ):
                     question = (task["plan"] or {}).get("summary_request") or task["request"]
                     if (
                         task["graph_version"] == GRAPH_VERSION
+                        and (task["plan"] or {}).get("summary_mode") == "overview"
+                    ):
+                        batch = overview_batch_index(stage)
+                        sources, coverage = await self.store.overview_batch(run_id, fence)
+                        if sources:
+                            await ensure_active()
+                            raw, usage = await models.answer_study(
+                                f"{question}\n整理当前第 {batch + 1} 批资料中的独立知识点，"
+                                "兼顾本批各页的定义、方法、条件和例子；不要声称覆盖未提供页面。",
+                                sources,
+                                history=task["history"],
+                            )
+                            AgentBudget().charge(usage)
+                            result = validate_study_answer(
+                                raw,
+                                sources,
+                                require_sections=usage.get("prompt_version")
+                                == STUDY_PROMPT_VERSION,
+                            )
+                        else:
+                            result, usage = {"insufficient_evidence": True, "claims": []}, {}
+                        await ensure_active()
+                        await self.store.publish_summary(
+                            run_id,
+                            fence,
+                            result,
+                            {**usage, "overview_version": OVERVIEW_VERSION},
+                            coverage,
+                        )
+                    elif (
+                        task["graph_version"] in COMPOSABLE_GRAPH_VERSIONS
                         and (task["plan"] or {}).get("summary_mode") == "overview"
                     ):
                         sources, coverage = await self.store.overview_sources(run_id, fence)
@@ -240,13 +281,24 @@ class AgentRunProcessor:
                             result = validate_study_answer(
                                 raw,
                                 sources,
-                                require_explanation=usage.get("prompt_version")
+                                require_sections=usage.get("prompt_version")
                                 == STUDY_PROMPT_VERSION,
                             )
                         else:
                             result, usage = {"insufficient_evidence": True, "claims": []}, {}
                         await ensure_active()
                         await self.store.publish_summary(run_id, fence, result, usage, coverage)
+                    elif task["graph_version"] in FAST_GRAPH_VERSIONS:
+                        result, usage = await answer_focused(
+                            question,
+                            task["history"],
+                            embeddings=embeddings,
+                            model=models,
+                            search=search,
+                            ensure_active=ensure_active,
+                        )
+                        usage["graph_version"] = task["graph_version"]
+                        await self.store.publish_summary(run_id, fence, result, usage)
                     else:
                         result, usage = await self.executor.answer(
                             question,
@@ -262,7 +314,7 @@ class AgentRunProcessor:
                 elif stage == "pdf":
                     await self.store.publish_pdf(run_id, fence)
                 elif stage in ("quiz", "weak"):
-                    if task["graph_version"] == GRAPH_VERSION:
+                    if task["graph_version"] in COMPOSABLE_GRAPH_VERSIONS:
                         plan = validate_graph_task_plan(
                             {k: v for k, v in task["plan"].items() if k != "weak_topics"}
                         )
