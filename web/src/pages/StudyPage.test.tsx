@@ -13,8 +13,8 @@ vi.mock("../api/learning", async (original) => ({
 }));
 vi.mock("../hooks/useDocuments", () => ({ useDocuments: () => ({ documents: [], nextCursor: null }) }));
 vi.mock("../components/AppHeader", () => ({ AppHeader: () => <header>Review Agent</header> }));
-vi.mock("../components/StudySourcePanel", () => ({ StudySourcePanel: ({ source, onClose }: { source: { unit: number }; onClose: () => void }) =>
-  <aside aria-label="原文预览"><span>PDF 第 {source.unit} 页</span><button onClick={onClose} type="button">关闭原文预览</button></aside> }));
+vi.mock("../components/StudySourcePanel", () => ({ StudySourcePanel: ({ section }: { section?: { sources: { citation: { unit: number } }[] } }) =>
+  <aside aria-label="原文预览">{section ? <span>PDF 第 {section.sources[0]?.citation.unit} 页</span> : null}</aside> }));
 afterEach(() => { cleanup(); vi.clearAllMocks(); });
 
 function show(messages: learning.ConversationMessage[] = [], scoped = true) {
@@ -110,7 +110,7 @@ test("a first-time visitor without materials is sent to upload before creating a
   expect(screen.queryByRole("button", { name: "新建对话" })).not.toBeInTheDocument();
 });
 
-test("groups repeated citations after the answer and previews the PDF in a side panel", async () => {
+test("historical points and their full explanation retain usable original sources", async () => {
   const citation = { source_id: "source", document_id: "document", version_id: 1, unit: 3, quote: "A cited passage",
     locator: { kind: "page" as const, position: 3, title: null, path: [] } };
   show([{ id: "answer", question: "关键概念是什么？", status: "answered",
@@ -123,9 +123,6 @@ test("groups repeated citations after the answer and previews the PDF in a side 
   expect(screen.getByText("排序后取中间位置，可以帮助理解中位数为何较稳定。")).toBeVisible();
   expect(screen.queryByText(/属于原文|不属于原文/)).not.toBeInTheDocument();
   expect(screen.queryByRole("link", { name: /第 3 页/ })).not.toBeInTheDocument();
-  await userEvent.click(screen.getByText("来源 · 1"));
-  await userEvent.click(screen.getByRole("button", { name: "stats.pdf · 第 3 页" }));
+  await userEvent.click(screen.getByRole("button", { name: "详细讲解 查看原文" }));
   expect(screen.getByLabelText("原文预览")).toHaveTextContent("PDF 第 3 页");
-  await userEvent.click(screen.getByRole("button", { name: "关闭原文预览" }));
-  expect(screen.queryByLabelText("原文预览")).not.toBeInTheDocument();
 });

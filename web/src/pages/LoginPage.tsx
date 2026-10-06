@@ -4,6 +4,7 @@ import { Navigate, useLocation, useNavigate } from "react-router-dom";
 
 import { getAuthConfig, login, register, type AuthIdentity } from "../api/auth";
 import { ApiError } from "../api/documents";
+import { BrandMark } from "../components/BrandMark";
 import { Icon } from "../components/Icon";
 import { ThemeToggle } from "../components/ThemeToggle";
 
@@ -38,8 +39,15 @@ export function LoginPage({ identity }: { identity: AuthIdentity | null }) {
   }
 
   return <main className="auth-screen" id="main-content" tabIndex={-1}>
+    <aside className="auth-story" aria-label="学习空间介绍">
+      <span className="auth-story__kicker">你的知识，值得被认真对待</span>
+      <h2>读有所思。<br />学有所获。</h2>
+      <p>从原文到理解，从练习到记忆。<br />为每一次学习，留下一条清晰的路径。</p>
+      <div className="auth-story__journey"><span><Icon name="document" />阅读资料</span><span><Icon name="chat" />理解知识</span><span><Icon name="review" />持续复习</span></div>
+      <div className="auth-story__note"><Icon name="shield" /><span>资料与学习记录，保存在你的专属空间。</span></div>
+    </aside>
     <section className="auth-card" aria-labelledby="auth-title">
-      <div className="auth-brand"><span className="brand" translate="no"><span className="brand__mark"><Icon name="book" /></span><span>Review Agent</span></span><ThemeToggle /></div>
+      <div className="auth-brand"><span className="brand" translate="no"><span className="brand__mark"><BrandMark /></span><span>Review Agent</span></span><ThemeToggle /></div>
       <h1 id="auth-title">{signup ? "创建学习账号" : "登录学习空间"}</h1>
       <p>你的资料、问答和练习保存在专属空间。</p>
       {config.data?.login_mode === "portal" ? <a className="button button--primary" href="/login">使用门户账号登录</a> : <form onSubmit={(event) => void submit(event)}>

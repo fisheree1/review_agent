@@ -62,3 +62,23 @@ test("a completed run retains its PDF download and quiz without a stop button", 
   expect(screen.getByText("作答记录 bound-attempt")).toBeVisible();
   expect(screen.queryByRole("button", { name: "停止后续步骤" })).not.toBeInTheDocument();
 });
+
+test("long PDF progress distinguishes pages seen from complete text and survives a limit", async () => {
+  show({ ...fixture, status: "completed", stage: "done", outputs: [{ kind: "summary", text: "整理完成", coverage: {
+    sampled_pages: 32, indexed_pages: 300, full_pages: 20, processed_chunks: 32, indexed_chunks: 800,
+    completed_batches: 4, total_batches: 8, budget_limited: 1, knowledge_points: 19, cited_pages: 15,
+  } }] });
+  expect(await screen.findByText("已阅读 32 / 300 页，32 / 800 个正文片段")).toBeVisible();
+  expect(screen.getByText(/其中 20 页的索引正文已完整读取/)).toBeVisible();
+  expect(screen.getByText(/本次整理已达到处理上限/)).toBeVisible();
+  expect(screen.getByText(/尚未读完全部正文/)).toBeVisible();
+});
+
+test("an overview batch shows recoverable progress while still working", async () => {
+  show({ ...fixture, status: "queued", stage: "overview_1", outputs: [{ kind: "summary", text: "正在分批整理资料", coverage: {
+    sampled_pages: 8, indexed_pages: 80, full_pages: 8, processed_chunks: 8, indexed_chunks: 80,
+    completed_batches: 1, total_batches: 8, knowledge_points: 6,
+  } }] });
+  expect(await screen.findByText("正在分批整理资料")).toBeVisible();
+  expect(screen.getByText("已完成 1 / 8 批")).toBeVisible();
+});

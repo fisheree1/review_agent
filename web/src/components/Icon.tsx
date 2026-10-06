@@ -1,6 +1,10 @@
 import type { SVGProps } from "react";
 
 export type IconName =
+  | "review"
+  | "shield"
+  | "user"
+  | "arrowRight"
   | "book"
   | "chat"
   | "check"
@@ -23,6 +27,10 @@ export type IconName =
   | "upload";
 
 const paths: Record<IconName, React.ReactNode> = {
+  review: <><path d="M3 10a9 9 0 1 1 1.8 7.5" /><path d="M3 4v6h6M12 7v5l3 2" /></>,
+  shield: <><path d="m12 3 8 3v6c0 5-8 9-8 9s-8-4-8-9V6l8-3Z" /><path d="m8.5 12 2.5 2.5 4.5-5" /></>,
+  user: <><circle cx="12" cy="8" r="4" /><path d="M4 21v-2a8 8 0 0 1 16 0v2" /></>,
+  arrowRight: <><path d="M4 12h16" /><path d="m14 6 6 6-6 6" /></>,
   book: <><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" /><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2Z" /></>,
   chat: <><path d="M20 11.5a8.5 8.5 0 0 1-8.5 8.5 9 9 0 0 1-3.6-.8L4 20l.8-3.9A8.5 8.5 0 1 1 20 11.5Z" /><path d="M8 11.5h8" /><path d="M8 14.5h5" /></>,
   check: <path d="m5 12 4 4L19 6" />,

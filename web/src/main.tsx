@@ -6,6 +6,7 @@ import { BrowserRouter } from "react-router-dom";
 import { App } from "./App";
 import { applyTheme, initialTheme } from "./theme";
 import "./styles.css";
+import "./workspace-theme.css";
 
 applyTheme(initialTheme());
 try { document.documentElement.dataset.sidebarCollapsed = localStorage.getItem("review-agent-sidebar-v1") ?? "false"; }

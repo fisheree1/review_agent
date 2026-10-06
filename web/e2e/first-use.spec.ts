@@ -66,6 +66,7 @@ test("a first-time learner uploads a PDF and starts a five-question practice fro
   await page.getByRole("button", { name: "开始上传 1 份" }).click();
   await page.getByRole("link", { name: /预览 preview-fixture.pdf/ }).click();
   await expect(page.getByRole("img", { name: "PDF 原文件第 1 页" })).toBeVisible();
+  await page.getByLabel("资料操作", { exact: true }).click();
   await page.getByRole("button", { name: "准备资料并生成 5 题" }).click();
   await expect(page).toHaveURL(`/quizzes/${quizId}`);
   expect(quiz).toMatchObject({

@@ -48,7 +48,7 @@ export function AgentRunCard({ runId, conversationId }: { runId: string; convers
   const reviews = value.outputs.filter((item) => item.kind === "review");
   const status = value.status === "cancelled" ? "已停止" : value.status === "expired" ? "等待已过期，请新建任务"
     : value.status === "failed" || value.status === "blocked" ? value.failure_message ?? "任务暂时无法继续，已完成内容仍可查看"
-      : value.status === "completed" ? "已完成" : stageNames[value.stage] ?? "任务正在继续";
+      : value.status === "completed" ? "已完成" : stageNames[value.stage] ?? (value.stage.startsWith("overview_") ? "正在分批整理资料" : "任务正在继续");
   if (value.status === "completed" && !value.clarification && value.outputs.every((output) => output.kind === "summary" && !output.coverage)) return null;
 
   return <section className="agent-task-result agent-run-card" aria-label="学习任务进度">
@@ -66,7 +66,15 @@ export function AgentRunCard({ runId, conversationId }: { runId: string; convers
     </details> : output.kind === "review" ? <section key={output.attempt_id} aria-label="任务错题复习"><p>{output.text}</p>
       {output.quiz_id && output.attempt_id ? <QuizAttemptPanel key={output.attempt_id} quizId={output.quiz_id} attemptId={output.attempt_id} weakOnlyInitially /> : null}
     </section> : output.kind === "pdf" ? <a className="agent-run-card__pdf" download="study-notes.pdf" href={apiUrl(`/api/v1/agent-runs/${runId}/notes.pdf`)} key={index}>下载知识点 PDF</a>
-      : output.kind === "summary" && output.coverage ? <p className="agent-run-card__coverage" key={index}>抽样覆盖 {output.coverage.sampled_pages} / {output.coverage.indexed_pages} 页</p>
+      : output.kind === "summary" && output.coverage ? <div className="agent-run-card__coverage" key={index} role="status">
+        {output.coverage.processed_chunks !== undefined ? <>
+          <p>已阅读 {output.coverage.sampled_pages} / {output.coverage.indexed_pages} 页，{output.coverage.processed_chunks} / {output.coverage.indexed_chunks} 个正文片段</p>
+          <p>其中 {output.coverage.full_pages} 页的索引正文已完整读取 · 已整理 {output.coverage.knowledge_points ?? 0} 个知识点</p>
+          {value.status === "queued" || value.status === "running" ? <p>已完成 {output.coverage.completed_batches} / {output.coverage.total_batches} 批</p> : null}
+          {output.coverage.budget_limited ? <p>本次整理已达到处理上限，已保留当前知识点。可按章节继续整理。</p> : null}
+          {output.coverage.processed_chunks < (output.coverage.indexed_chunks ?? 0) ? <p>尚未读完全部正文，请结合原文核对。</p> : null}
+        </> : <p>抽样覆盖 {output.coverage.sampled_pages} / {output.coverage.indexed_pages} 页</p>}
+      </div>
         : output.kind === "notice" || output.kind === "clarification" ? <p key={index}>{output.text}</p> : null)}
     {value.status === "waiting_input" || value.status === "waiting_result" ? <button className="button button--secondary" disabled={cancel.isPending} onClick={() => cancel.mutate()} type="button">停止后续步骤</button> : null}
   </section>;

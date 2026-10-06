@@ -4,6 +4,7 @@ import { useNavigate } from "react-router-dom";
 
 import { changePassword, logout, type AuthIdentity } from "../api/auth";
 import { ApiError } from "../api/documents";
+import { PageHeading } from "../components/PageHeading";
 import { AppHeader } from "../components/AppHeader";
 
 export function AccountPage({ identity }: { identity: AuthIdentity }) {
@@ -43,9 +44,7 @@ export function AccountPage({ identity }: { identity: AuthIdentity }) {
   return <div className="app-page">
     <AppHeader />
     <main className="account-page" id="main-content" tabIndex={-1}>
-      <header className="learning-heading">
-      <h1>我的账号</h1>
-      </header>
+      <PageHeading title="我的账号" kicker="专属学习空间" description="管理你的账号与登录信息。" />
       <section className="learning-card account-identity"><div><h2>登录信息</h2><p>当前登录：{identity.login_mode === "portal" ? "门户管理员" : identity.email}</p></div>
       {identity.login_mode === "portal" ? <a className="button button--secondary" href="/">返回门户管理登录</a> : <button className="button button--secondary" disabled={busy} onClick={() => void signOut()} type="button">退出登录</button>}</section>
       {identity.login_mode === "portal" ? <section className="learning-card"><p>登录和密码由门户统一管理，退出门户后此项目也会停止访问。</p></section> : <section className="account-password learning-card" aria-labelledby="change-password-title">

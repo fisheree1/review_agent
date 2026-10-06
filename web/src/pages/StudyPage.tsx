@@ -1,15 +1,16 @@
-import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useInfiniteQuery, useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "react-router-dom";
 
 import type { DocumentSummary } from "../api/documents";
-import type { Citation } from "../api/rag";
 import {
   askConversation, cancelConversationMessage, createCollection, createConversation,
   deleteCollection, getAgentRun, getConversation, listCollections, listConversations,
   rateConversationMessage, setCollectionDocuments, setConversationScope,
-  type Collection, type ConversationMessage, type ScopeChoice,
+  type Collection, type ScopeChoice,
 } from "../api/learning";
+import { PageHeading } from "../components/PageHeading";
+import { StudyAnswer, studySections, type StudySection } from "../components/StudyAnswer";
 import { StudySourcePanel } from "../components/StudySourcePanel";
 import { ConversationSidebar } from "../components/ConversationSidebar";
 import { ConversationMessages } from "../components/ConversationMessages";
@@ -30,26 +31,6 @@ const taskExamples = [
   ["讲解错题", "解释我最近一次练习的错题，并展示解析和来源。"],
   ["薄弱点练习", "根据我最近练习的薄弱知识点，再生成 5 道中等难度单选题。"],
 ] as const;
-
-function StudyAnswer({ message, onSource }: {
-  message: ConversationMessage;
-  onSource: (citation: Citation, filename: string) => void;
-}) {
-  if (!message.answer) return null;
-  const sources = Array.from(new Map(message.answer.claims.flatMap((claim) => claim.citations)
-    .map((citation) => [citation.source_id, citation])).values());
-  return <div className="study-answer">
-    {message.answer.claims.map((claim, index) => <p key={index}>{claim.text}</p>)}
-    {message.answer.explanation?.split("\n").filter((part) => part.trim()).map((part, index) =>
-      <p key={`explanation-${index}`}>{part}</p>)}
-    {sources.length ? <details className="study-sources"><summary>来源 · {sources.length}</summary>
-      <div>{sources.map((citation) => {
-        const filename = message.scope.find((item) => item.document_id === citation.document_id)?.filename ?? "原文";
-        return <button className="study-sources__item" key={citation.source_id} onClick={() => onSource(citation, filename)} type="button">{filename} · 第 {citation.unit} 页</button>;
-      })}</div>
-    </details> : null}
-  </div>;
-}
 
 function CollectionRow({ collection, documents, refresh }: {
   collection: Collection; documents: DocumentSummary[]; refresh: () => void;
@@ -122,13 +103,44 @@ export function StudyPage() {
     queryFn: () => getAgentRun(message.run_id!),
     refetchInterval: (query: { state: { data?: { status: string } } }) => query.state.data && ["queued", "running"].includes(query.state.data.status) ? 1500 : false,
   })) });
-  const [historyCollapsed, setHistoryCollapsed] = useState(false);
+  const [historyCollapsed, setHistoryCollapsed] = useState(() => Boolean(conversationId));
   const [collectionName, setCollectionName] = useState("");
   const [activeScope, setActiveScope] = useState<ScopeChoice>(emptyScope);
   const [scopeOpen, setScopeOpen] = useState(false);
   const [question, setQuestion] = useState("");
-  const [selectedSource, setSelectedSource] = useState<{ citation: Citation; filename: string } | null>(null);
-  const closeSource = useCallback(() => setSelectedSource(null), []);
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  const [sourceOpen, setSourceOpen] = useState(false);
+  const [followExplanation, setFollowExplanation] = useState(true);
+  const sectionsByMessage = useMemo(() => new Map(detail.data?.messages.map((message) => [message.id, studySections(message)]) ?? []), [detail.data?.messages]);
+  const sections = useMemo(() => Array.from(sectionsByMessage.values()).flat(), [sectionsByMessage]);
+  const selectedSection = sections.find((section) => section.key === selectedKey)
+    ?? Array.from(sectionsByMessage.values()).reverse().find((items) => items.length)?.[0];
+  const closeSource = useCallback(() => setSourceOpen(false), []);
+  const followFrame = useRef(0);
+  const selectSection = useCallback((section: StudySection) => {
+    window.cancelAnimationFrame(followFrame.current);
+    setSelectedKey(section.key);
+    setSourceOpen(window.matchMedia("(max-width: 1099px)").matches);
+  }, []);
+  useEffect(() => () => window.cancelAnimationFrame(followFrame.current), [followExplanation, conversationId]);
+  const followScroll = (target: EventTarget) => {
+    if (!followExplanation || sourceOpen && window.matchMedia("(max-width: 1099px)").matches) return;
+    if (!(target instanceof HTMLElement) || !target.classList.contains("learning-messages")) return;
+    window.cancelAnimationFrame(followFrame.current);
+    followFrame.current = window.requestAnimationFrame(() => {
+      const bounds = target.getBoundingClientRect();
+      const anchor = bounds.top + Math.min(120, bounds.height * 0.25);
+      let nearest: HTMLElement | null = null;
+      let distance = Infinity;
+      target.querySelectorAll<HTMLElement>("[data-knowledge-key]").forEach((element) => {
+        const rect = element.getBoundingClientRect();
+        if (rect.bottom <= bounds.top || rect.top >= bounds.bottom) return;
+        const delta = anchor < rect.top ? rect.top - anchor : anchor > rect.bottom ? anchor - rect.bottom : 0;
+        if (delta < distance) { nearest = element; distance = delta; }
+      });
+      if (nearest) setSelectedKey((nearest as HTMLElement).dataset.knowledgeKey ?? null);
+    });
+  };
   const askKey = useRef<{ fingerprint: string; key: string } | null>(null);
   const composer = useRef<HTMLTextAreaElement>(null);
   useLayoutEffect(() => {
@@ -151,7 +163,7 @@ export function StudyPage() {
   useEffect(() => {
     if (detail.data) setScopeOpen(detail.data.scope.length === 0);
   }, [conversationId, scopeIdentity]);
-  useEffect(() => setSelectedSource(null), [conversationId]);
+  useEffect(() => { setSelectedKey(null); setSourceOpen(false); }, [conversationId]);
 
   const createCollectionMutation = useMutation({
     mutationFn: () => createCollection(collectionName, ""),
@@ -208,14 +220,18 @@ export function StudyPage() {
   return <div className="app-page">
     <AppHeader />
     <main className="learning-page study-page" id="main-content" tabIndex={-1}>
-      <header className="learning-heading study-heading"><h1>学习空间</h1>{!firstUse ? <button className="icon-button" aria-label={historyCollapsed ? "展开对话列表" : "收起对话列表"} aria-expanded={!historyCollapsed} aria-controls="conversation-history" onClick={() => setHistoryCollapsed((value) => !value)} type="button"><Icon name="panel" /></button> : null}</header>
+      <PageHeading title="学习空间" kicker="让每一个知识点，真正被理解" description="一边深入讲解，一边对照原文。" className="study-heading" actions={!firstUse ? <button className="icon-button" aria-label={historyCollapsed ? "展开对话列表" : "收起对话列表"} aria-expanded={!historyCollapsed} aria-controls="conversation-history" onClick={() => setHistoryCollapsed((value) => !value)} type="button"><Icon name="panel" /></button> : null} />
       {createConversationMutation.error ? <p role="alert">创建失败，请重试。<button className="button button--secondary" type="button" onClick={openCreate}>重试新建</button></p> : null}
       {error ? <ErrorState message={error.message} onRetry={() => { void refreshDocuments(); refreshCollections(); refreshConversations(); if (conversationId) void detail.refetch(); }} /> : null}
-      <div className={`learning-grid study-layout${historyCollapsed || firstUse ? " study-layout--history-collapsed" : ""}${selectedSource ? " study-layout--source-open" : ""}`}>
-        <div className="learning-content">
+      <div className={`learning-grid study-layout${historyCollapsed || firstUse ? " study-layout--history-collapsed" : ""}${conversationId ? " study-layout--source-open" : ""}`}>
+        <div className="learning-content" onScrollCapture={(event) => followScroll(event.target)}>
           {conversationId ? <section className="learning-card agent-conversation" aria-label="当前对话">
             {detail.isPending ? <p role="status">正在打开对话…</p> : null}
             {detail.data ? <>
+              <div className="study-reading-controls">
+                <label><input checked={followExplanation} onChange={(event) => setFollowExplanation(event.target.checked)} type="checkbox" />跟随讲解</label>
+                <button className="text-action study-open-source" disabled={!selectedSection} onClick={() => setSourceOpen(true)} type="button">查看原文</button>
+              </div>
               <ConversationMessages key={conversationId} updateKey={JSON.stringify(detail.data.messages.map((message) => [message.id, message.status, message.answer, message.task_result]))}>{detail.data.messages.length === 0 ? <div className="agent-empty">
                 {detail.data.scope.length === 0 ? <p>选择资料后开始对话</p> : null}
                 {detail.data.scope.length ? <div className="agent-suggestions" aria-label="任务示例">{taskExamples.map(([label, request]) =>
@@ -229,7 +245,7 @@ export function StudyPage() {
                     <button className="button button--secondary" onClick={() => draftTask(message.question)} type="button">重新编辑任务</button></div> : null}
                   {message.status === "insufficient" ? <p>在所选资料中找不到足够依据。</p> : null}
                   <ConversationTaskResult message={message} onRequest={draftTask} />
-                  <StudyAnswer message={message} onSource={(citation, filename) => setSelectedSource({ citation, filename })} />
+                  <StudyAnswer sections={sectionsByMessage.get(message.id) ?? []} activeKey={selectedSection?.key} onSelect={selectSection} />
                   {message.answer && (message.status === "answered" || message.status === "insufficient") ?
                     <div className="learning-actions" aria-label="回答反馈">
                       {message.feedback ? <p>已反馈：{message.feedback === "helpful" ? "有帮助" : message.feedback === "unhelpful" ? "无帮助" : "引用不准确"}</p>
@@ -267,6 +283,7 @@ export function StudyPage() {
               </form>
             </> : null}
           </section> : <section className="workspace-empty learning-card">
+            <span className="workspace-empty__mark" aria-hidden="true"><Icon name="book" /></span>
             {documentsLoading || collections.isPending ? <p role="status">正在读取可用资料…</p> : hasAvailableSource ? <>
               <h2>今天想学些什么？</h2><button className="button button--primary" disabled={createConversationMutation.isPending} onClick={openCreate} type="button">开始新对话</button>
             </> : <>
@@ -290,7 +307,7 @@ export function StudyPage() {
             {collections.data?.map((collection) => <CollectionRow key={collection.id} collection={collection} documents={documents} refresh={refreshCollections} />)}
           </details>
         </aside> : null}
-        {selectedSource ? <StudySourcePanel filename={selectedSource.filename} onClose={closeSource} source={selectedSource.citation} /> : null}
+        {conversationId ? <StudySourcePanel key={conversationId} section={selectedSection} mobileOpen={sourceOpen} onClose={closeSource} /> : null}
       </div>
     </main>
   </div>;

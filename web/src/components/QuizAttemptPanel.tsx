@@ -2,6 +2,8 @@ import { useEffect, useId, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { getAttempt, retryGrading, submitAttempt, type AttemptQuestion } from "../api/learning";
+import { Link } from "react-router-dom";
+import { enrollReview } from "../api/review";
 import { useQuizDraft } from "../hooks/useQuizDraft";
 import { SourcePreview } from "./SourcePreview";
 import { ErrorState } from "./ErrorState";
@@ -79,6 +81,10 @@ export function QuizAttemptPanel({ quizId, attemptId, weakOnlyInitially = false,
     mutationFn: () => retryGrading(quizId, attemptId),
     onSuccess: () => { void cache.invalidateQueries({ queryKey: ["attempt", quizId, attemptId] }); },
   });
+  const enrollment = useMutation({
+    mutationFn: () => enrollReview(quizId, attemptId),
+    onSuccess: () => { void cache.invalidateQueries({ queryKey: ["review-queue"] }); },
+  });
   const error = attempt.error ?? submit.error ?? retry.error;
   const reloadSaved = async () => {
     const result = await attempt.refetch();
@@ -144,6 +150,11 @@ export function QuizAttemptPanel({ quizId, attemptId, weakOnlyInitially = false,
           <button className="button button--secondary" onClick={() => setWeakOnly((value) => !value)} type="button">{weakOnly ? "查看全部题目" : "只看薄弱题"}</button></>
           : <p>本次没有识别出明显薄弱知识点。</p>}
         {attempt.data?.weak_topics?.length && onPractice ? <button className="button button--secondary" onClick={onPractice} type="button">练习薄弱知识点</button> : null}
+        {reviewedQuestions.some((question) => (question.earned ?? 0) < 0.7) ? <div>
+          <button className="button button--secondary" disabled={enrollment.isPending || enrollment.isSuccess} onClick={() => enrollment.mutate()} type="button">{enrollment.isPending ? "正在加入…" : enrollment.isSuccess ? "已加入长期复习" : "将错题加入长期复习"}</button>
+          {enrollment.data ? <p role="status">新增 {enrollment.data.added} 题，已有 {enrollment.data.existing} 题。<Link to="/review">开始复习</Link></p> : null}
+          {enrollment.error ? <ErrorState message={enrollment.error.message} onRetry={() => enrollment.mutate()} /> : null}
+        </div> : null}
       </section> : null}
       {visibleQuestions?.map((question) => <section className="learning-card quiz-question" tabIndex={-1} id={`quiz-question-${panelId}-${question.id}`} key={question.id}>
         <span className="eyebrow">第 {question.ordinal} 题 · {question.topic}</span>
