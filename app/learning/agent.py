@@ -65,7 +65,13 @@ class PlanningModel(Protocol):
 
 class StudyPlanningModel(PlanningModel, Protocol):
     async def answer_study(
-        self, question: str, sources: list[Evidence], *, history: list[dict[str, str]] | None = None
+        self,
+        question: str,
+        sources: list[Evidence],
+        *,
+        history: list[dict[str, str]] | None = None,
+        mode: Literal["focused", "overview"] = "focused",
+        repair_feedback: dict[str, Any] | None = None,
     ) -> tuple[dict[str, Any], dict[str, Any]]: ...
 
 

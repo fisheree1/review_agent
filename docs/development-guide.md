@@ -203,6 +203,8 @@ React 前端位于 `web/`。服务端状态由 TanStack Query 管理，当前资
 
 ### 快速问答与复习的验证
 
+真实课程 PDF 的金标准与当前对话 Agent 实测使用 `scripts.evaluate_pdf_agent.py`，流程与评分边界见 [真实 PDF 评测指南](./real-pdf-agent-evaluation.md)。私人金标准、回答和报告只存 `evals/local/`；默认预检不调用模型，`--live` 才运行付费服务。不要将关键词初筛通过率当成语义正确率。
+
 - `pytest -q tests/test_focused_answer.py tests/test_graph_run_processor.py tests/test_agent_evaluation.py tests/test_spaced_review.py`：引用、证据不足、预算/取消、旧图兼容、生成调用数及评分规则/API。
 - `python -m scripts.verify_spaced_review --isolated [--previous]`：仅在预装 pgvector 的空临时库运行；验证空库或 0016 升级、元数据一致、个人/空间隔离、重复导入、同键重放、并发 revision、到期索引、成员与来源删除。
 - `pnpm --dir web test src/pages/ReviewPage.test.tsx`：答案隐藏、键盘展开、保留请求键的网络重试及加载/错误/空状态。
@@ -217,3 +219,11 @@ React 前端位于 `web/`。服务端状态由 TanStack Query 管理，当前资
 
 
 知识点联动阅读的定向检查：后端 `tests/test_rag.py`、`test_focused_answer.py`、`test_langgraph_workflow.py`、`test_graph_run_processor.py`、`test_overview.py`、`test_study_pdf.py` 检查逐点结构、范围外来源拒绝、页码解析、旧回执、分批合并及导出；前端 `StudyPage.test.tsx`、`StudySourcePanel.test.tsx`、`PdfPreview.test.tsx` 与 `web/e2e/study-linked-reading.spec.ts` 检查历史兼容、预览失败恢复、跟随开关、跨资料切换、重复下载和 390px 键盘返回。浏览器使用合成 PDF，不调用真实模型；实际讲解质量仍需真实资料评估。
+
+### v5 PDF 生成质量与诊断验证
+
+`pytest -q tests/test_study_generation.py tests/test_rag.py tests/test_pdf_parser.py tests/test_graph_run_processor.py tests/test_pdf_agent_evaluation.py` 验证原文摘录编号、未知编号拒绝、换行恢复的唯一性、数字/措辞不更改、一次修复的实际计费、预算和取消、未知请求不重试、混合图文与小 logo 区分、OCR 多行标签、v4 批次恢复以及跨状态快照发布后的评测读取。
+
+隔离 PostgreSQL 脚本 `verify_long_pdf_overview --isolated` 另验证两次生成回执恢复不会再次计费、诊断去重、错误租约和额外敏感字段拒绝。fixture 不调用外部模型。当前 v5 使用已有 JSONB 和回执表，无额外迁移；采用现有 0017 临时库运行，禁止连接真实资料库。
+
+真实验证必须固定 PDF/金标准哈希，区分中途调试运行和最终冻结版本；报告保存应用源码指纹、Prompt/图/解析版本、主问题与前置轮次用量。关键词和引文初筛通过仍需按 rubric 检查语义，不通过修改参考答案提高分数。OCR 位置不能用于宣称箭头识别正确。

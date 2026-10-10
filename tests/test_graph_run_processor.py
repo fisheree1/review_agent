@@ -4,6 +4,8 @@ import asyncio
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
+import pytest
+
 from app.learning.api import StudyAnswerResponse
 from app.learning.application import LearningModel
 from app.learning.graph_tasks import GraphTaskPlan
@@ -148,8 +150,10 @@ def test_v3_focused_stage_bypasses_tool_planning_and_uses_recorded_calls() -> No
     assert store.publish_summary.call_args.args[3]["graph_version"] == GRAPH_VERSION
 
 
-def test_new_overview_processes_one_bounded_batch_and_keeps_its_citations() -> None:
+@pytest.mark.parametrize("version", ["study-graph-v4", GRAPH_VERSION])
+def test_overview_versions_resume_one_bounded_batch_and_keep_its_citations(version: str) -> None:
     worker, store, model = setup("overview_2", {"summary_mode": "overview"})
+    store.claim.return_value["graph_version"] = version
     source = Evidence(
         uuid4(),
         "The median resists extreme values.",
@@ -189,3 +193,4 @@ def test_new_overview_processes_one_bounded_batch_and_keeps_its_citations() -> N
     store.overview_sources.assert_not_awaited()
     assert store.publish_summary.call_args.args[2]["claims"][0]["citations"][0]["unit"] == 120
     assert store.publish_summary.call_args.args[4] == coverage
+    assert model.answer_study.call_args.kwargs["mode"] == "overview"

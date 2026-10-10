@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID, uuid4
 
 import httpx
@@ -135,7 +135,13 @@ class FakeModels:
         return plan, usage
 
     async def answer_study(
-        self, question: str, sources: list[Evidence], *, history: list[dict[str, str]] | None = None
+        self,
+        question: str,
+        sources: list[Evidence],
+        *,
+        history: list[dict[str, str]] | None = None,
+        mode: Literal["focused", "overview"] = "focused",
+        repair_feedback: dict[str, Any] | None = None,
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         payload, usage = await self.answer(question, sources, history=history)
         for claim in payload["claims"]:

@@ -18,12 +18,75 @@ from app.rag.domain import (
     Scope,
     Task,
     split_content,
+    study_quote_options,
     validate_answer,
     validate_study_answer,
     validate_vectors,
 )
 from app.rag.ports import RagStore
 from app.rag.providers import CloudModels
+
+
+@pytest.mark.parametrize("content", ["Exact text.", "a" * 1201, "Line.\n" * 300])
+def test_numbered_study_excerpts_keep_all_original_text_and_quote_limits(content: str) -> None:
+    options = study_quote_options(content)
+    assert "".join(options.values()) == content
+    assert all(8 <= len(quote) <= 800 and quote in content for quote in options.values())
+
+
+@pytest.mark.parametrize("quote_id", ["q1", "unknown", ["q1"]])
+def test_study_citation_ids_resolve_only_within_the_given_evidence(quote_id: Any) -> None:
+    source = Evidence(uuid4(), "The median resists\n extreme values.", 2, {})
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        context = json.loads(json.loads(request.content)["messages"][1]["content"])
+        assert context["evidence"][0]["quote_options"] == {"q1": source.content}
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "message": {
+                            "content": json.dumps(
+                                {
+                                    "insufficient_evidence": False,
+                                    "claims": [
+                                        {
+                                            "text": "Median is robust",
+                                            "citations": [
+                                                {
+                                                    "source_id": str(source.id),
+                                                    "quote_id": quote_id,
+                                                    "quote": "Fabricated fallback.",
+                                                }
+                                            ],
+                                        }
+                                    ],
+                                }
+                            )
+                        },
+                    }
+                ],
+                "usage": {"prompt_tokens": 100, "completion_tokens": 50},
+            },
+        )
+
+    async def run() -> dict[str, Any]:
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
+            provider = CloudModels(ModelSettings(deepseek_api_key=SecretStr("test-only")), client)
+            payload, _ = await provider.answer_study("Explain", [source])
+            return payload
+
+    payload = asyncio.run(run())
+    if quote_id == "q1":
+        assert (
+            validate_answer(payload, [source])["claims"][0]["citations"][0]["quote"]
+            == source.content
+        )
+    else:
+        with pytest.raises(RagFailure, match="回答未通过"):
+            validate_answer(payload, [source])
 
 
 def test_chunks_preserve_source_offsets_and_boundaries() -> None:
@@ -126,6 +189,38 @@ def test_study_generation_allows_general_explanation_without_changing_reader_rag
     asyncio.run(check())
     assert "You may use general knowledge" in prompts[0]
     assert "Do not use outside knowledge" in prompts[1]
+
+
+@pytest.mark.parametrize(
+    "finish,content,reason",
+    [
+        ("length", '{"claims":[', "truncated"),
+        ("stop", "not valid JSON", "invalid_json"),
+    ],
+)
+def test_received_invalid_study_generation_preserves_known_usage_for_bounded_repair(
+    finish: str,
+    content: str,
+    reason: str,
+) -> None:
+    def handle(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "choices": [{"finish_reason": finish, "message": {"content": content}}],
+                "usage": {"prompt_tokens": 100, "completion_tokens": 50},
+            },
+        )
+
+    async def check() -> None:
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
+            models = CloudModels(ModelSettings(deepseek_api_key=SecretStr("test-only")), client)
+            payload, usage = await models.answer_study("Explain", [], mode="focused")
+            assert payload == {"_generation_error": reason}
+            assert usage["completion_tokens"] == 50 and usage["prompt_tokens"] == 100
+            assert usage["generation_error"] == reason
+
+    asyncio.run(check())
 
 
 @pytest.mark.parametrize("vector", [[0.0] * 1024, [1.0] * 512, [float("nan")] * 1024])

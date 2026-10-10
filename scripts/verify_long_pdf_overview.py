@@ -3,7 +3,7 @@
 import argparse
 import asyncio
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID, uuid4
 
 from sqlalchemy import delete, select, update
@@ -16,6 +16,7 @@ from app.documents.infrastructure.models import (
     DocumentVersionModel,
     WorkspaceModel,
 )
+from app.learning.agent import AgentBudget
 from app.learning.application import LearningService
 from app.learning.graph_tasks import GraphTaskPlan
 from app.learning.infrastructure.langgraph_workflow import LangGraphStudyExecutor
@@ -24,7 +25,8 @@ from app.learning.run_application import AgentRunProcessor, RecordedCalls, Recor
 from app.learning.run_models import AgentRun, AgentStageExecution
 from app.learning.run_store import SqlAgentRunStore
 from app.learning.store import SqlLearningStore
-from app.rag.domain import STUDY_PROMPT_VERSION, Evidence
+from app.learning.study_generation import generate_study
+from app.rag.domain import STUDY_PROMPT_VERSION, Evidence, RagFailure
 from app.rag.models import DocumentChunk, DocumentIndex
 from scripts.verify_learning_flow import PROFILE, VECTOR, FakeModels, expect_error, seed_document
 
@@ -36,7 +38,13 @@ class Model(FakeModels):
         self.calls = 0
 
     async def answer_study(
-        self, question: str, sources: list[Evidence], *, history: Any = None
+        self,
+        question: str,
+        sources: list[Evidence],
+        *,
+        history: Any = None,
+        mode: Literal["focused", "overview"] = "focused",
+        repair_feedback: dict[str, Any] | None = None,
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         self.calls += 1
         assert 1 <= len(sources) <= 8
@@ -217,6 +225,88 @@ async def verify() -> None:
     assert model.calls == before
     detail = await learning.get_conversation(owner.public_id, UUID(conversation["id"]))
     assert len(detail["messages"][-1]["answer"]["claims"]) == 8
+
+    # Replay a known invalid response and its successful repair after a crash.
+    # Neither request can be billed again; diagnosis must remain metadata only.
+    class RepairModel(Model):
+        async def answer_study(
+            self,
+            question: str,
+            sources: list[Evidence],
+            *,
+            history: Any = None,
+            mode: Literal["focused", "overview"] = "focused",
+            repair_feedback: dict[str, Any] | None = None,
+        ) -> tuple[dict[str, Any], dict[str, Any]]:
+            raw, usage = await super().answer_study(question, sources, history=history, mode=mode)
+            if self.calls == 1:
+                raw["claims"][0]["citations"][0]["quote"] = "invented synthetic quote"
+            return raw, usage
+
+    repaired = await new_run()
+    task = await runs.claim()
+    assert task is not None and task["id"] == str(repaired)
+    sources, coverage = await runs.overview_batch(repaired, task["fence"])
+    repair_model = RepairModel(selected)
+
+    async def note(attempt: int, diagnosis: dict[str, Any]) -> None:
+        await runs.record_answer_validation(repaired, task["fence"], attempt, diagnosis)
+
+    async def active() -> None:
+        await runs.ensure_active(repaired, task["fence"])
+
+    for _ in range(2):
+        answer, usage = await generate_study(
+            "Overview",
+            sources,
+            [],
+            model=RecordedModels(repair_model, RecordedCalls(runs, repaired, task["fence"])),
+            budget=AgentBudget(),
+            ensure_active=active,
+            mode="overview",
+            record_validation=note,
+        )
+    assert repair_model.calls == 2
+    assert usage["repair_calls"] == 1
+    try:
+        await runs.record_answer_validation(repaired, uuid4(), 0, {"reason": "answer_shape"})
+    except RagFailure as exc:
+        assert exc.code == "AGENT_RUN_INACTIVE"
+    else:
+        raise AssertionError("Foreign fence accepted")
+    try:
+        await runs.record_answer_validation(
+            repaired,
+            task["fence"],
+            0,
+            {
+                "reason": "answer_shape",
+                "provider_payload": "must never be stored",
+            },
+        )
+    except RagFailure as exc:
+        assert exc.code == "ANSWER_INVALID"
+    else:
+        raise AssertionError("Private payload accepted into diagnosis")
+    async with sessions() as session:
+        row = await session.scalar(
+            select(AgentRun).where(
+                AgentRun.workspace_id == owner.id,
+                AgentRun.public_id == repaired,
+            )
+        )
+        assert row is not None and row.usage["model_calls"] == 2
+        assert row.usage["answer_validation"] == [
+            {
+                "stage": "summary",
+                "attempt": 0,
+                "reason": "citation_quote_not_exact",
+                "point": 1,
+                "citation": 1,
+            }
+        ]
+    await runs.publish_summary(repaired, task["fence"], answer, usage, coverage)
+    await runs.cancel(owner.public_id, repaired)
     # Source deletion removes partial and final summaries through existing cascades.
     async with sessions.begin() as session:
         await session.execute(
@@ -237,7 +327,7 @@ async def verify() -> None:
     await close_database()
     print(
         "PASS: 64/72 pages; 8 bounded model calls; source isolation; receipt replay; "
-        "partial budget result; cancellation; deletion"
+        "partial budget result; cancellation; deletion; repair replay; sanitized diagnosis; fencing"
     )
 
 

@@ -6,7 +6,7 @@ import asyncio
 import logging
 import time
 from collections.abc import Awaitable, Callable
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 from app.core.errors import ApplicationError
@@ -16,7 +16,9 @@ from app.learning.conversation_tasks import TASK_VERSION, validate_task_plan
 from app.learning.focused_answer import answer_focused
 from app.learning.graph_tasks import GRAPH_TASK_VERSION, validate_graph_task_plan
 from app.learning.overview import OVERVIEW_VERSION, overview_batch_index
+from app.learning.study_generation import generate_study
 from app.learning.workflow import (
+    BATCHED_GRAPH_VERSIONS,
     COMPOSABLE_GRAPH_VERSIONS,
     FAST_GRAPH_VERSIONS,
     GRAPH_VERSION,
@@ -88,6 +90,12 @@ class RecordedCalls:
                     if kind == "plan_task"
                     else None
                 ),
+                **(
+                    {"generation_error": result[1]["generation_error"]}
+                    if result[1].get("generation_error")
+                    in {"truncated", "invalid_json", "invalid_shape"}
+                    else {}
+                ),
             }
         try:
             await self.store.finish_call(self.run_id, self.fence, ordinal, result, usage)
@@ -158,11 +166,22 @@ class RecordedModels:
         return result[0], result[1]
 
     async def answer_study(
-        self, question: str, sources: list[Evidence], *, history: list[dict[str, str]] | None = None
+        self,
+        question: str,
+        sources: list[Evidence],
+        *,
+        history: list[dict[str, str]] | None = None,
+        mode: Literal["focused", "overview"] | None = None,
+        repair_feedback: dict[str, Any] | None = None,
     ) -> tuple[dict[str, Any], dict[str, Any]]:
-        result = await self.calls.invoke(
-            "answer", lambda: self.models.answer_study(question, sources, history=history)
-        )
+        async def invoke() -> tuple[dict[str, Any], dict[str, Any]]:
+            if mode is None:
+                return await self.models.answer_study(question, sources, history=history)
+            return await self.models.answer_study(
+                question, sources, history=history, mode=mode, repair_feedback=repair_feedback
+            )
+
+        result = await self.calls.invoke("answer", invoke)
         return result[0], result[1]
 
     async def generate_quiz_with_usage(
@@ -213,6 +232,9 @@ class AgentRunProcessor:
         async def search(vector: list[float], query: str) -> list[Evidence]:
             return await self.store.sources(run_id, fence, vector, query)
 
+        async def record_validation(attempt: int, diagnosis: dict[str, Any]) -> None:
+            await self.store.record_answer_validation(run_id, fence, attempt, diagnosis)
+
         try:
             async with asyncio.timeout(110):
                 stage = task["stage"]
@@ -235,22 +257,36 @@ class AgentRunProcessor:
                         )
                         await self.store.save_plan(run_id, fence, validate_task_plan(payload))
                 elif stage == "summary" or (
-                    task["graph_version"] == GRAPH_VERSION and stage.startswith("overview_")
+                    task["graph_version"] in BATCHED_GRAPH_VERSIONS
+                    and stage.startswith("overview_")
                 ):
                     question = (task["plan"] or {}).get("summary_request") or task["request"]
                     if (
-                        task["graph_version"] == GRAPH_VERSION
+                        task["graph_version"] in BATCHED_GRAPH_VERSIONS
                         and (task["plan"] or {}).get("summary_mode") == "overview"
                     ):
                         batch = overview_batch_index(stage)
                         sources, coverage = await self.store.overview_batch(run_id, fence)
-                        if sources:
+                        if sources and task["graph_version"] == GRAPH_VERSION:
+                            result, usage = await generate_study(
+                                f"{question}\n整理当前第 {batch + 1} 批资料中的独立知识点，"
+                                "兼顾本批各页的定义、方法、条件和例子；不要声称覆盖未提供页面。",
+                                sources,
+                                task["history"],
+                                model=models,
+                                budget=AgentBudget(),
+                                ensure_active=ensure_active,
+                                mode="overview",
+                                record_validation=record_validation,
+                            )
+                        elif sources:
                             await ensure_active()
                             raw, usage = await models.answer_study(
                                 f"{question}\n整理当前第 {batch + 1} 批资料中的独立知识点，"
                                 "兼顾本批各页的定义、方法、条件和例子；不要声称覆盖未提供页面。",
                                 sources,
                                 history=task["history"],
+                                mode="overview",
                             )
                             AgentBudget().charge(usage)
                             result = validate_study_answer(
@@ -296,6 +332,8 @@ class AgentRunProcessor:
                             model=models,
                             search=search,
                             ensure_active=ensure_active,
+                            reliable=task["graph_version"] == GRAPH_VERSION,
+                            record_validation=record_validation,
                         )
                         usage["graph_version"] = task["graph_version"]
                         await self.store.publish_summary(run_id, fence, result, usage)

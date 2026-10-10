@@ -35,8 +35,8 @@ from app.learning.run_models import AgentRun, AgentStageExecution
 from app.learning.scope import missing, retrieve_sources, snapshot_ready
 from app.learning.store import LEASE_SECONDS, SqlLearningStore
 from app.learning.workflow import (
+    BATCHED_GRAPH_VERSIONS,
     COMPOSABLE_GRAPH_VERSIONS,
-    GRAPH_VERSION,
     MAX_RUN_CALLS,
     MAX_RUN_COST_UNITS,
     MAX_RUN_TOKENS,
@@ -45,7 +45,7 @@ from app.learning.workflow import (
     check_run_budget,
     run_seconds_limit,
 )
-from app.rag.domain import Evidence, RagFailure
+from app.rag.domain import ANSWER_VALIDATION_REASONS, Evidence, RagFailure
 from app.rag.messages import FAILURES
 from app.rag.models import DocumentChunk, DocumentIndex
 
@@ -679,6 +679,32 @@ class SqlAgentRunStore:
     ) -> None:
         await self.learning.finish_grading(public_id, fence, grades)
 
+    async def record_answer_validation(
+        self, public_id: UUID, fence: UUID, attempt: int, diagnosis: dict[str, Any]
+    ) -> None:
+        reason = diagnosis.get("reason")
+        if (
+            type(attempt) is not int
+            or attempt not in (0, 1)
+            or not isinstance(reason, str)
+            or reason not in ANSWER_VALIDATION_REASONS
+            or set(diagnosis) - {"reason", "point", "citation", "length"}
+            or any(
+                type(value) is not int or not 0 <= value <= 150_000
+                for key, value in diagnosis.items()
+                if key != "reason"
+            )
+        ):
+            raise RagFailure("ANSWER_INVALID", "校验诊断格式错误")
+        async with self.sessions.begin() as session:
+            run = await self._active(session, public_id, fence)
+            issues = list(run.usage.get("answer_validation", []))
+            if not any(
+                item["stage"] == run.stage and item["attempt"] == attempt for item in issues
+            ):
+                issues.append({"stage": run.stage, "attempt": attempt, **diagnosis})
+                run.usage = {**run.usage, "answer_validation": issues[-16:]}
+
     async def _advance(self, session: AsyncSession, run: AgentRun, stage: str, status: str) -> None:
         await session.execute(
             update(AgentStageExecution)
@@ -770,7 +796,7 @@ class SqlAgentRunStore:
             message = await session.get(ConversationMessage, run.message_id)
             assert message is not None
             if (
-                run.graph_version == GRAPH_VERSION
+                run.graph_version in BATCHED_GRAPH_VERSIONS
                 and (run.plan or {}).get("summary_mode") == "overview"
             ):
                 assert coverage is not None

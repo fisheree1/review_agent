@@ -13,8 +13,9 @@ from app.rag.domain import Evidence
 from app.rag.ports import Embeddings
 
 LEGACY_GRAPH_VERSION = "study-graph-v1"
-GRAPH_VERSION = "study-graph-v4"
-FAST_GRAPH_VERSIONS = ("study-graph-v3", GRAPH_VERSION)
+BATCHED_GRAPH_VERSIONS = ("study-graph-v4", "study-graph-v5")
+GRAPH_VERSION = "study-graph-v5"
+FAST_GRAPH_VERSIONS = ("study-graph-v3", *BATCHED_GRAPH_VERSIONS)
 PLANNED_GRAPH_VERSION = "study-graph-v2"
 COMPOSABLE_GRAPH_VERSIONS = (PLANNED_GRAPH_VERSION, *FAST_GRAPH_VERSIONS)
 SUPPORTED_GRAPH_VERSIONS = (LEGACY_GRAPH_VERSION, *COMPOSABLE_GRAPH_VERSIONS)
@@ -68,6 +69,9 @@ class AgentRunPersistence(Protocol):
         self, public_id: UUID, fence: UUID, ordinal: int, result: Any, usage: dict[str, Any]
     ) -> None: ...
     async def reject_call(self, public_id: UUID, fence: UUID, ordinal: int) -> None: ...
+    async def record_answer_validation(
+        self, public_id: UUID, fence: UUID, attempt: int, diagnosis: dict[str, Any]
+    ) -> None: ...
     async def save_plan(
         self, public_id: UUID, fence: UUID, plan: TaskPlan | GraphTaskPlan
     ) -> None: ...
@@ -104,7 +108,7 @@ class AgentRunPersistence(Protocol):
 
 
 def run_seconds_limit(graph_version: str | None) -> int:
-    return MAX_OVERVIEW_RUN_SECONDS if graph_version == GRAPH_VERSION else MAX_RUN_SECONDS
+    return MAX_OVERVIEW_RUN_SECONDS if graph_version in BATCHED_GRAPH_VERSIONS else MAX_RUN_SECONDS
 
 
 def check_run_budget(usage: dict[str, Any], graph_version: str | None = None) -> None:
