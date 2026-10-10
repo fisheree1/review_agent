@@ -12,6 +12,7 @@ from app.documents.infrastructure.models import DocumentModel, DocumentPageModel
 from app.rag.domain import RETRIEVAL_VERSION, Chunk, Evidence, Scope, Task
 from app.rag.messages import FAILURES
 from app.rag.models import DocumentChunk, DocumentIndex, RagQuestion
+from app.rag.retrieval import evidence_from_row, hybrid_candidates
 
 LEASE_SECONDS = 180
 
@@ -519,44 +520,10 @@ class SqlRagStore:
                     DocumentChunk.embedding.is_not(None),
                 )
             )
-            semantic = (
-                await session.execute(query.order_by(distance, DocumentChunk.ordinal).limit(12))
-            ).all()
-            lexical_rank = func.ts_rank_cd(
-                func.to_tsvector("simple", DocumentChunk.content),
-                func.plainto_tsquery("simple", task.question),
+            candidates = await hybrid_candidates(
+                session, query, distance=distance, query_text=task.question
             )
-            lexical = (
-                await session.execute(
-                    query.where(lexical_rank > 0)
-                    .order_by(lexical_rank.desc(), DocumentChunk.ordinal)
-                    .limit(12)
-                )
-            ).all()
-            scores: dict[UUID, float] = {}
-            sources: dict[UUID, Evidence] = {}
-            for rows in (semantic, lexical):
-                for rank, (chunk, page, cosine_distance) in enumerate(rows, start=1):
-                    # Model still decides sufficiency. Avoid feeding clearly unrelated candidates.
-                    if float(cosine_distance) > 0.8:
-                        continue
-                    scores[chunk.public_id] = scores.get(chunk.public_id, 0) + 1 / (60 + rank)
-                    sources[chunk.public_id] = Evidence(
-                        chunk.public_id,
-                        chunk.content,
-                        chunk.unit,
-                        {
-                            "kind": page.locator_kind,
-                            "position": page.locator_position,
-                            "title": page.locator_title,
-                            "path": page.locator_path,
-                        },
-                        1 - float(cosine_distance),
-                    )
-            return [
-                sources[key]
-                for key in sorted(scores, key=lambda key: scores[key], reverse=True)[:6]
-            ]
+            return [evidence_from_row(row) for row, _score in candidates[:6]]
 
     async def finish_question(
         self, task: Task, answer: dict[str, Any], usage: dict[str, Any]

@@ -9,7 +9,7 @@ DIMENSIONS = 1024
 CHUNK_VERSION = "source-window-1500-180-v1"
 PROMPT_VERSION = "cited-claims-v1"
 STUDY_PROMPT_VERSION = "pdf-knowledge-sections-v2"
-RETRIEVAL_VERSION = "exact-cosine-fts-rrf-v1"
+RETRIEVAL_VERSION = "exact-cosine-cjk-fts-rrf-v2"
 
 
 class RagFailure(Exception):
