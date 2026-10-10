@@ -603,20 +603,40 @@ class SqlAlchemyDocumentRepository(DocumentRepository):
             object_key=document.object_key,
             media_type=document.media_type,
             source_sha256=document.sha256,
+            attempt=job.attempt_count,
         )
 
-    async def complete_job(self, *, job: ClaimedJob, parsed: ParsedDocument) -> None:
+    async def renew_job_lease(self, *, job: ClaimedJob, lease_seconds: int) -> bool:
+        renewed = await self._session.scalar(
+            update(ProcessingJobModel)
+            .where(
+                ProcessingJobModel.id == job.id,
+                ProcessingJobModel.status == JobStatus.PROCESSING.value,
+                ProcessingJobModel.attempt_count == job.attempt,
+            )
+            .values(lease_expires_at=datetime.now(UTC) + timedelta(seconds=lease_seconds))
+            .returning(ProcessingJobModel.id)
+        )
+        return renewed is not None
+
+    @staticmethod
+    def _owns(job_model: ProcessingJobModel, job: ClaimedJob) -> bool:
+        # A reclaimed job has a new attempt number; the previous holder must not write results.
+        return (
+            job_model.status == JobStatus.PROCESSING.value
+            and job_model.attempt_count == job.attempt
+        )
+
+    async def complete_job(self, *, job: ClaimedJob, parsed: ParsedDocument) -> bool:
         job_model = await self._session.get(ProcessingJobModel, job.id, with_for_update=True)
         document = await self._session.get(DocumentModel, job.document_id, with_for_update=True)
-        if job_model is None or document is None:
-            return
-        if job_model.status == JobStatus.SUCCEEDED.value:
-            return
+        if job_model is None or document is None or not self._owns(job_model, job):
+            return False
         if document.status in {DocumentStatus.DELETING.value, DocumentStatus.DELETED.value}:
             job_model.status = JobStatus.CANCELLED.value
             job_model.finished_at = datetime.now(UTC)
             job_model.lease_expires_at = None
-            return
+            return True
 
         version = await self._session.scalar(
             select(DocumentVersionModel).where(
@@ -670,6 +690,7 @@ class SqlAlchemyDocumentRepository(DocumentRepository):
         job_model.failure_message = None
         job_model.finished_at = datetime.now(UTC)
         job_model.lease_expires_at = None
+        return True
 
     async def fail_job(
         self,
@@ -677,13 +698,11 @@ class SqlAlchemyDocumentRepository(DocumentRepository):
         job: ClaimedJob,
         failure_code: str,
         failure_message: str,
-    ) -> None:
+    ) -> bool:
         job_model = await self._session.get(ProcessingJobModel, job.id, with_for_update=True)
         document = await self._session.get(DocumentModel, job.document_id, with_for_update=True)
-        if job_model is None or document is None:
-            return
-        if job_model.status in {JobStatus.SUCCEEDED.value, JobStatus.CANCELLED.value}:
-            return
+        if job_model is None or document is None or not self._owns(job_model, job):
+            return False
         job_model.status = JobStatus.FAILED.value
         job_model.failure_code = failure_code
         job_model.failure_message = failure_message
@@ -694,6 +713,7 @@ class SqlAlchemyDocumentRepository(DocumentRepository):
             document.failure_code = failure_code
             document.failure_message = failure_message
             document.updated_at = datetime.now(UTC)
+        return True
 
 
 class SqlAlchemyDocumentsUnitOfWork:

@@ -142,7 +142,9 @@ class DocumentRepository(Protocol):
 
     async def claim_next_job(self, *, lease_seconds: int) -> ClaimedJob | None: ...
 
-    async def complete_job(self, *, job: ClaimedJob, parsed: ParsedDocument) -> None: ...
+    async def renew_job_lease(self, *, job: ClaimedJob, lease_seconds: int) -> bool: ...
+
+    async def complete_job(self, *, job: ClaimedJob, parsed: ParsedDocument) -> bool: ...
 
     async def fail_job(
         self,
@@ -150,7 +152,7 @@ class DocumentRepository(Protocol):
         job: ClaimedJob,
         failure_code: str,
         failure_message: str,
-    ) -> None: ...
+    ) -> bool: ...
 
 
 class DocumentsUnitOfWork(Protocol):
