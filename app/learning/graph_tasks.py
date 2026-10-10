@@ -7,6 +7,7 @@ from typing import Any, Literal, Self
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from app.learning.conversation_tasks import QuizTaskConfig
+from app.learning.domain import validate_blueprint
 from app.rag.domain import RagFailure
 
 GRAPH_TASK_VERSION = "study-intent-plan-v1"
@@ -51,7 +52,7 @@ class GraphTaskPlan(BaseModel):
     def quiz_config(self, weak_topics: list[str] | None = None) -> dict[str, Any]:
         if self.config is None:
             raise RagFailure("TASK_PLAN_INVALID", "缺少出题设置")
-        config = self.config.model_dump() | {"generation_mode": "agent"}
+        config = validate_blueprint({**self.config.model_dump(), "generation_mode": "agent"})
         if weak_topics is not None:
             if not weak_topics:
                 raise RagFailure("REVIEW_NOT_AVAILABLE", "当前资料范围没有可用薄弱点")

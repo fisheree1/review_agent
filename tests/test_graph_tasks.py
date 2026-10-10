@@ -2,6 +2,7 @@
 
 import pytest
 
+from app.learning.domain import MONOLINGUAL_QUIZ_SCHEMA_VERSION, QUIZ_SCHEMA_VERSION
 from app.learning.graph_tasks import validate_graph_task_plan
 from app.rag.domain import RagFailure
 
@@ -26,6 +27,21 @@ def test_notes_pdf_and_bilingual_quiz_can_share_one_request() -> None:
     )
     assert plan.steps == ["summary", "pdf", "quiz", "review", "practice"]
     assert plan.quiz_config()["language"] == "zh-en"
+
+
+@pytest.mark.parametrize(
+    ("language", "schema_version"),
+    [("zh-en", QUIZ_SCHEMA_VERSION), ("en", MONOLINGUAL_QUIZ_SCHEMA_VERSION)],
+)
+def test_graph_quiz_config_is_a_validated_blueprint(language: str, schema_version: str) -> None:
+    # Quiz validation reads schema_version; a raw plan config crashed every graph quiz stage.
+    plan = validate_graph_task_plan(
+        {"steps": ["quiz"], "title": "Practice", "config": {**QUIZ, "language": language}}
+    )
+    config = plan.quiz_config()
+    assert config["schema_version"] == schema_version
+    assert config["generation_mode"] == "agent"
+    assert plan.quiz_config(["梯度下降"])["topic"] == "梯度下降"
 
 
 @pytest.mark.parametrize(

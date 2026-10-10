@@ -23,6 +23,7 @@ from app.learning.run_application import AgentRunProcessor
 from app.learning.run_models import AgentRun, AgentStageExecution
 from app.learning.run_store import SqlAgentRunStore
 from app.learning.store import SqlLearningStore
+from app.learning.workflow import GRAPH_VERSION, run_seconds_limit
 from app.main import app
 from app.rag.domain import RagFailure
 from scripts.verify_learning_flow import PROFILE, FakeModels, expect_error, seed_document
@@ -224,9 +225,10 @@ async def verify() -> None:
         recovering = await request("What resists outliers?")
         task = await runs.claim()
         assert task is not None and task["id"] == str(recovering)
-        await runs.begin_call(recovering, task["fence"], 0, "plan_task")
+        # New runs plan with plan_graph_task; a receipt of another kind is never replayed.
+        await runs.begin_call(recovering, task["fence"], 0, "plan_graph_task")
         receipt = [
-            {"action": "answer"},
+            {"steps": ["summary"], "summary_request": "What resists outliers?"},
             {"model": "fake", "prompt_tokens": 20, "completion_tokens": 5},
         ]
         await runs.finish_call(
@@ -249,7 +251,7 @@ async def verify() -> None:
         unknown = await request("What resists outliers?")
         task = await runs.claim()
         assert task is not None
-        await runs.begin_call(unknown, task["fence"], 0, "plan_task")
+        await runs.begin_call(unknown, task["fence"], 0, "plan_graph_task")
         async with sessions.begin() as session:
             await session.execute(
                 update(AgentRun)
@@ -281,7 +283,7 @@ async def verify() -> None:
             await session.execute(
                 update(AgentRun)
                 .where(AgentRun.public_id == exhausted)
-                .values(usage={"execution_seconds": 770})
+                .values(usage={"execution_seconds": run_seconds_limit(GRAPH_VERSION)})
             )
         assert not await worker.process_next()
         assert (await runs.get(owner.public_id, exhausted))["failure_code"] == "RUN_BUDGET_EXCEEDED"
