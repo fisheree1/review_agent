@@ -41,7 +41,7 @@ def test_agent_evaluation_does_not_count_unknown_answers_as_success() -> None:
     ]
 
 
-@pytest.mark.parametrize("engine", ["legacy", "langgraph"])
+@pytest.mark.parametrize("engine", ["legacy", "langgraph", "focused"])
 def test_comparison_never_sends_foreign_or_deselected_fixture_text_to_models(
     monkeypatch, engine
 ) -> None:
@@ -105,8 +105,13 @@ def test_comparison_never_sends_foreign_or_deselected_fixture_text_to_models(
                 "completion_tokens": 10,
             }
 
+        async def answer_study(self, question: str, sources: list[Evidence], *, history=None):
+            return await self.answer(question, sources, history=history)
+
     monkeypatch.setattr(evaluate_agent, "CloudModels", Model)
     report = asyncio.run(evaluate_agent.compare(fixture, engine=engine))
     assert all(row["passed"] for row in report["results"])
+    agent_row = next(row for row in report["results"] if row["mode"] == "agent")
+    assert agent_row["model_calls"] == (1 if engine == "focused" else 4)
     assert fixture.documents[1].text not in embedded and fixture.documents[2].text not in embedded
     assert all(document.text not in str(report) for document in fixture.documents)

@@ -81,9 +81,10 @@ test("study workflow restores drafts, allows waiting questions and completes rev
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto(`/study/${conversationId}`);
   await page.getByRole("button", { name: "完整学习", exact: true }).click();
-  await page.getByLabel("发送任务或问题").press("Control+Enter");
+  await page.getByLabel("发送任务或问题").press("Enter");
   const card = page.getByRole("region", { name: "学习任务进度" });
   await expect(card.getByText("等待你作答", { exact: true })).toBeVisible();
+  await expect(card.getByRole("button", { name: "停止后续步骤" })).toBeVisible();
   await expect(page.getByText("章节总结：中位数不易受极端值影响。")).toBeVisible();
   await expect(card.getByText(/参考答案/)).not.toBeVisible();
   await card.getByRole("radio", { name: "均值", exact: true }).check();
@@ -101,7 +102,8 @@ test("study workflow restores drafts, allows waiting questions and completes rev
   await expect(review.getByText("参考答案：中位数")).toBeVisible();
   await expect(card.getByText("再判断一次：哪个统计量较稳健？")).toBeVisible();
   await page.reload();
-  await expect(card.getByText("已完成", { exact: true })).toBeVisible();
+  await expect(card.getByText("再判断一次：哪个统计量较稳健？")).toBeVisible();
+  await expect(card.getByRole("button", { name: "停止后续步骤" })).not.toBeVisible();
   expect(messages).toHaveLength(2);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   const ids = await page.locator("[id]").evaluateAll((elements) => elements.map((element) => element.id));

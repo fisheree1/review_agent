@@ -13,6 +13,14 @@ from app.documents.domain.entities import ParsedDocument
 from app.documents.infrastructure.parser_output import read_parser_result
 
 
+async def _kill_process_group(process: asyncio.subprocess.Process) -> None:
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    await process.wait()
+
+
 class PypdfDocumentParser:
     def __init__(
         self,
@@ -57,15 +65,15 @@ class PypdfDocumentParser:
             try:
                 await asyncio.wait_for(process.wait(), timeout=self._timeout_seconds)
             except TimeoutError as exc:
-                try:
-                    os.killpg(process.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-                await process.wait()
+                await _kill_process_group(process)
                 raise DocumentProcessingError(
                     code="PDF_PARSE_TIMEOUT",
                     message="PDF 解析超时，请缩小文件后重试",
                 ) from exc
+            except asyncio.CancelledError:
+                # Lease loss or shutdown: never leave an OCR process group running.
+                await _kill_process_group(process)
+                raise
 
             if process.returncode != 0:
                 raise DocumentProcessingError(

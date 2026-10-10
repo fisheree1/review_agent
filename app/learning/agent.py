@@ -9,7 +9,13 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
-from app.rag.domain import Evidence, RagFailure, validate_answer, validate_vectors
+from app.rag.domain import (
+    STUDY_PROMPT_VERSION,
+    Evidence,
+    RagFailure,
+    validate_study_answer,
+    validate_vectors,
+)
 from app.rag.ports import Embeddings
 
 AGENT_VERSION = "scoped-study-tools-v1"
@@ -54,6 +60,18 @@ class PlanningModel(Protocol):
 
     async def answer(
         self, question: str, sources: list[Evidence], *, history: list[dict[str, str]] | None = None
+    ) -> tuple[dict[str, Any], dict[str, Any]]: ...
+
+
+class StudyPlanningModel(PlanningModel, Protocol):
+    async def answer_study(
+        self,
+        question: str,
+        sources: list[Evidence],
+        *,
+        history: list[dict[str, str]] | None = None,
+        mode: Literal["focused", "overview"] = "focused",
+        repair_feedback: dict[str, Any] | None = None,
     ) -> tuple[dict[str, Any], dict[str, Any]]: ...
 
 
@@ -139,7 +157,7 @@ async def run_scoped_agent(
     history: list[dict[str, str]],
     *,
     embeddings: Embeddings,
-    model: PlanningModel,
+    model: StudyPlanningModel,
     search: SourceSearch,
     ensure_active: RunCheck | None = None,
     budget: AgentBudget | None = None,
@@ -163,9 +181,13 @@ async def run_scoped_agent(
         return answer, plan.usage(plan.last_usage, AGENT_VERSION)
     if ensure_active is not None:
         await ensure_active()
-    payload, usage = await model.answer(question, plan.sources, history=history)
+    payload, usage = await model.answer_study(question, plan.sources, history=history)
     plan.budget.charge(usage)
-    answer = validate_answer(payload, plan.sources)
+    answer = validate_study_answer(
+        payload,
+        plan.sources,
+        require_sections=usage.get("prompt_version") == STUDY_PROMPT_VERSION,
+    )
     plan.trace.append({"tool": "answer", "insufficient_evidence": answer["insufficient_evidence"]})
     return answer, plan.usage(usage, AGENT_VERSION)
 

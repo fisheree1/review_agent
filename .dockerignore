@@ -1,6 +1,7 @@
 .git
 .venv
 .env
+evals/local
 __pycache__
 .pytest_cache
 *.py[cod]

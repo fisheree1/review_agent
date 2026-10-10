@@ -3,12 +3,14 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 
 import { getCurrentUser } from "./api/auth";
+import { setCsrfToken } from "./api/client";
 import { ApiError } from "./api/documents";
 import { ErrorState } from "./components/ErrorState";
 import { LibraryPage } from "./pages/LibraryPage";
 import { PageLoadBoundary, PageLoading } from "./components/PageLoadBoundary";
 
 const ReaderPage = lazy(() => import("./pages/ReaderPage").then((module) => ({ default: module.ReaderPage })));
+const ReviewPage = lazy(() => import("./pages/ReviewPage").then((module) => ({ default: module.ReviewPage })));
 const StudyPage = lazy(() => import("./pages/StudyPage").then((module) => ({ default: module.StudyPage })));
 const QuizPage = lazy(() => import("./pages/QuizPage").then((module) => ({ default: module.QuizPage })));
 const QuizAttemptPage = lazy(() => import("./pages/QuizAttemptPage").then((module) => ({ default: module.QuizAttemptPage })));
@@ -21,6 +23,8 @@ export function App() {
   const auth = useQuery({ queryKey: ["auth-me"], queryFn: getCurrentUser, retry: false });
   useEffect(() => {
     const expire = () => {
+      setCsrfToken(null);
+      queryClient.removeQueries({ predicate: (query) => query.queryKey[0] !== "auth-me" });
       queryClient.setQueryData(["auth-me"], null);
       void queryClient.invalidateQueries({ queryKey: ["auth-me"] });
     };
@@ -40,6 +44,7 @@ export function App() {
     <PageLoadBoundary key={location.pathname}><Suspense fallback={<PageLoading />}><Routes>
       <Route path="/" element={<LibraryPage />} />
       <Route path="/documents/:documentId" element={<ReaderPage />} />
+      <Route path="/review" element={<ReviewPage />} />
       <Route path="/study" element={<StudyPage />} />
       <Route path="/study/:conversationId" element={<StudyPage />} />
       <Route path="/quizzes" element={<QuizPage />} />

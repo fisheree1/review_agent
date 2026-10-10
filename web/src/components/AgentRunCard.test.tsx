@@ -25,13 +25,15 @@ function show(run: learning.AgentRun) {
   </QueryClientProvider>);
 }
 
-test("waiting study exposes original scope, actual count and the bound attempt", async () => {
+test("waiting study keeps the bound attempt visible and lets the user stop later steps", async () => {
   show(fixture);
-  expect(await screen.findByText("原范围：讲义.pdf")).toBeVisible();
+  expect(await screen.findByText("等待你作答")).toBeVisible();
   expect(screen.getByText(/已生成 2 \/ 5 题/)).toBeVisible();
   expect(screen.getByText("作答记录 bound-attempt")).toBeVisible();
-  expect(screen.getByText(/下方继续提问/)).toBeVisible();
-  expect(screen.getByText("等待作答 · 当前步骤")).toHaveAttribute("aria-current", "step");
+  expect(screen.queryByText("原范围：讲义.pdf")).not.toBeInTheDocument();
+  vi.mocked(learning.cancelAgentRun).mockResolvedValue({ ...fixture, status: "cancelled" });
+  await userEvent.click(screen.getByRole("button", { name: "停止后续步骤" }));
+  await waitFor(() => expect(learning.cancelAgentRun).toHaveBeenCalledWith("run"));
 });
 
 test("clarification resumes one run with its revision and stable request key", async () => {
@@ -41,13 +43,42 @@ test("clarification resumes one run with its revision and stable request key", a
   await user.type(await screen.findByRole("textbox", { name: "请说明章节" }), "第三章");
   await user.click(screen.getByRole("button", { name: "补充并继续" }));
   await waitFor(() => expect(learning.respondAgentRun).toHaveBeenCalledWith("run", "第三章", 3, expect.any(String)));
+  expect(screen.getByRole("button", { name: "停止后续步骤" })).toBeVisible();
 });
 
-test("cancel failure remains visible and completed outputs remain available", async () => {
+test("a failed stop request keeps the waiting task and retry control visible", async () => {
   show(fixture);
   vi.mocked(learning.cancelAgentRun).mockRejectedValue(new Error("连接中断"));
-  const user = userEvent.setup();
-  await user.click(await screen.findByRole("button", { name: "停止后续步骤" }));
+  await userEvent.click(await screen.findByRole("button", { name: "停止后续步骤" }));
   expect(await screen.findByText("连接中断")).toBeVisible();
+  expect(screen.getByRole("button", { name: "停止后续步骤" })).toBeEnabled();
   expect(screen.getByText("作答记录 bound-attempt")).toBeVisible();
+});
+
+test("a completed run retains its PDF download and quiz without a stop button", async () => {
+  show({ ...fixture, status: "completed", stage: "done", outputs: [...fixture.outputs,
+    { kind: "pdf", text: "知识点 PDF 已准备好" }] });
+  expect(await screen.findByRole("link", { name: "下载知识点 PDF" })).toHaveAttribute("href", "/api/v1/agent-runs/run/notes.pdf");
+  expect(screen.getByText("作答记录 bound-attempt")).toBeVisible();
+  expect(screen.queryByRole("button", { name: "停止后续步骤" })).not.toBeInTheDocument();
+});
+
+test("long PDF progress distinguishes pages seen from complete text and survives a limit", async () => {
+  show({ ...fixture, status: "completed", stage: "done", outputs: [{ kind: "summary", text: "整理完成", coverage: {
+    sampled_pages: 32, indexed_pages: 300, full_pages: 20, processed_chunks: 32, indexed_chunks: 800,
+    completed_batches: 4, total_batches: 8, budget_limited: 1, knowledge_points: 19, cited_pages: 15,
+  } }] });
+  expect(await screen.findByText("已阅读 32 / 300 页，32 / 800 个正文片段")).toBeVisible();
+  expect(screen.getByText(/其中 20 页的索引正文已完整读取/)).toBeVisible();
+  expect(screen.getByText(/本次整理已达到处理上限/)).toBeVisible();
+  expect(screen.getByText(/尚未读完全部正文/)).toBeVisible();
+});
+
+test("an overview batch shows recoverable progress while still working", async () => {
+  show({ ...fixture, status: "queued", stage: "overview_1", outputs: [{ kind: "summary", text: "正在分批整理资料", coverage: {
+    sampled_pages: 8, indexed_pages: 80, full_pages: 8, processed_chunks: 8, indexed_chunks: 80,
+    completed_batches: 1, total_batches: 8, knowledge_points: 6,
+  } }] });
+  expect(await screen.findByText("正在分批整理资料")).toBeVisible();
+  expect(screen.getByText("已完成 1 / 8 批")).toBeVisible();
 });

@@ -10,6 +10,8 @@ import { AppHeader } from "../components/AppHeader";
 import { DocumentList } from "../components/DocumentList";
 import { ErrorState } from "../components/ErrorState";
 import { SelectField } from "../components/SelectField";
+import { PageHeading } from "../components/PageHeading";
+import { Icon } from "../components/Icon";
 import { UploadPanel } from "../components/UploadPanel";
 import { useDocuments } from "../hooks/useDocuments";
 
@@ -55,9 +57,9 @@ export function LibraryPage() {
     <div className="app-page">
       <AppHeader />
       <main className="library" id="main-content" tabIndex={-1}>
-        <header className="learning-heading page-heading"><h1>资料库</h1>
-          <Link className="button button--secondary" to="/study">进入学习空间</Link>
-        </header>
+        <PageHeading title="资料库" kicker="阅读，让知识沉淀" description="汇集你的学习资料，从一份 PDF 开始理解与探索。" actions={
+          <Link className="button button--primary" to="/study">进入学习空间<Icon name="arrowRight" /></Link>
+        } />
         <div className="library-layout">
         <div className="library-upload"><UploadPanel onUploaded={() => void refresh()} /></div>
         <section aria-labelledby="library-title" className="library-section">

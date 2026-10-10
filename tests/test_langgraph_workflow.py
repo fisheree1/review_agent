@@ -7,11 +7,11 @@ from uuid import uuid4
 
 import pytest
 
-from app.learning.agent import AgentBudget, PlanningModel
+from app.learning.agent import AgentBudget, StudyPlanningModel
 from app.learning.conversation_tasks import validate_task_plan
 from app.learning.infrastructure.langgraph_workflow import LangGraphStudyExecutor
 from app.learning.quiz_agent import QuizPlanningModel
-from app.rag.domain import Evidence, RagFailure
+from app.rag.domain import STUDY_PROMPT_VERSION, Evidence, RagFailure
 from app.rag.ports import Embeddings
 
 USAGE = {
@@ -37,23 +37,25 @@ def setup() -> tuple[Evidence, AsyncMock, AsyncMock, AsyncMock, AsyncMock]:
         document_id=uuid4(),
         version_id=7,
     )
-    model = AsyncMock(spec=PlanningModel)
+    model = AsyncMock(spec=StudyPlanningModel)
     model.plan_step.side_effect = [
         ({"tool": "search", "query": "median"}, USAGE),
         ({"tool": "read_source", "source_id": str(source.id)}, USAGE),
         ({"tool": "answer"}, USAGE),
     ]
-    model.answer.return_value = (
+    model.answer_study.return_value = (
         {
             "insufficient_evidence": False,
             "claims": [
                 {
                     "text": "Median resists outliers.",
+                    "title": "Median",
+                    "explanation": "An extreme value changes the mean more than the median.",
                     "citations": [{"source_id": str(source.id), "quote": source.content}],
                 }
             ],
         },
-        USAGE,
+        {**USAGE, "prompt_version": STUDY_PROMPT_VERSION},
     )
     embeddings = AsyncMock(spec=Embeddings)
     embeddings.embed.return_value = [[1.0] * 1024]
@@ -81,9 +83,13 @@ def test_graph_publishes_only_validated_scoped_citations() -> None:
     source, model, embeddings, search, active = setup()
     answer, usage = execute(model, embeddings, search, active)
     assert answer["claims"][0]["citations"][0]["document_id"] == str(source.document_id)
-    assert usage["model_calls"] == 4 and usage["graph_version"] == "study-graph-v1"
+    assert (
+        answer["claims"][0]["explanation"]
+        == "An extreme value changes the mean more than the median."
+    )
+    assert usage["model_calls"] == 4 and usage["graph_version"] == "study-graph-v2"
     assert usage["planning_prompt_version"] == "test-planner-v1"
-    assert model.answer.call_args.args[1] == [source]
+    assert model.answer_study.call_args.args[1] == [source]
 
 
 def test_graph_refuses_without_evidence_and_does_not_generate() -> None:
@@ -95,7 +101,7 @@ def test_graph_refuses_without_evidence_and_does_not_generate() -> None:
     ]
     answer, _ = execute(model, embeddings, search, active)
     assert answer == {"insufficient_evidence": True, "claims": []}
-    model.answer.assert_not_awaited()
+    model.answer_study.assert_not_awaited()
 
 
 @pytest.mark.parametrize(
@@ -113,7 +119,7 @@ def test_graph_rejects_foreign_source_duplicate_search_and_wrong_tool(
     model.plan_step.side_effect = [({"tool": "search", "query": "median"}, USAGE), (invalid, USAGE)]
     with pytest.raises(RagFailure):
         execute(model, embeddings, search, active)
-    model.answer.assert_not_awaited()
+    model.answer_study.assert_not_awaited()
 
 
 def test_graph_cancel_before_generation_never_calls_answer() -> None:
@@ -179,4 +185,4 @@ def test_planner_remembers_empty_search_and_refuses_instead_of_repeating_it() ->
     answer, _ = execute(model, embeddings, search, active)
     assert answer["insufficient_evidence"]
     search.assert_awaited_once()
-    model.answer.assert_not_awaited()
+    model.answer_study.assert_not_awaited()

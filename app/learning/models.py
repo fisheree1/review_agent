@@ -121,6 +121,7 @@ class Conversation(Base):
     create_key: Mapped[str | None] = mapped_column(String(200))
     create_request: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     scope: Mapped[list[dict[str, Any]]] = mapped_column(JSONB)
+    memory: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()

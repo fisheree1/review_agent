@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 
+import { Icon } from "./Icon";
 import { ApiError, uploadDocument } from "../api/documents";
 
 const MAX_FILE_SIZE = 25 * 1024 * 1024;
@@ -109,7 +110,9 @@ export function UploadPanel({ onUploaded }: UploadPanelProps) {
           chooseFiles(event.dataTransfer.files);
         }}
       >
+        <span aria-hidden="true" className="drop-zone__icon"><Icon name="upload" /></span>
         <strong>拖放文件到这里</strong>
+        <p className="drop-zone__hint">或选择你想学习的 PDF</p>
         <input
           accept="application/pdf,.pdf"
           className="visually-hidden" id="document-file" disabled={isUploading} multiple

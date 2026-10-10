@@ -1,0 +1,8 @@
+{
+  "version": "overview-coverage-v1",
+  "cases": [
+    {"id": "long-sparse", "pages": 300, "dense_first": 1},
+    {"id": "dense-opening", "pages": 60, "dense_first": 180},
+    {"id": "complete-short", "pages": 17, "dense_first": 1}
+  ]
+}

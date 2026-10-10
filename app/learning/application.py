@@ -6,7 +6,7 @@ from typing import Any, Protocol
 from uuid import UUID
 
 from app.core.errors import ApplicationError
-from app.learning.agent import AgentBudget, PlanningModel, run_scoped_agent
+from app.learning.agent import AgentBudget, StudyPlanningModel, run_scoped_agent
 from app.learning.conversation_tasks import TASK_VERSION, TaskPlanningModel, validate_task_plan
 from app.learning.domain import validate_blueprint, validate_candidates
 from app.learning.quiz_agent import QuizPlanningModel, run_quiz_agent
@@ -17,7 +17,7 @@ from app.rag.ports import Embeddings
 logger = logging.getLogger(__name__)
 
 
-class LearningModel(PlanningModel, QuizPlanningModel, TaskPlanningModel, Protocol):
+class LearningModel(StudyPlanningModel, QuizPlanningModel, TaskPlanningModel, Protocol):
     async def generate_quiz(
         self, config: dict[str, Any], sources: list[Evidence]
     ) -> dict[str, Any]: ...

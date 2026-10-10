@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID, uuid4
 
 import httpx
@@ -30,7 +30,7 @@ from app.learning.application import LearningProcessor, LearningService
 from app.learning.models import Conversation, ConversationMessage, Quiz, QuizAnswer, QuizAttempt
 from app.learning.store import SqlLearningStore
 from app.main import app
-from app.rag.domain import Evidence, RagFailure
+from app.rag.domain import STUDY_PROMPT_VERSION, Evidence, RagFailure
 from app.rag.models import DocumentChunk, DocumentIndex
 
 PROFILE = "learning-integration:1024:source-window-1500-180-v1"
@@ -97,6 +97,59 @@ class FakeModels:
             "prompt_tokens": 20,
             "completion_tokens": 5,
         }
+
+    async def plan_graph_task(
+        self,
+        request: str,
+        *,
+        history: list[dict[str, str]],
+        review_available: bool,
+        memory_summary: str,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        payload, usage = await self.plan_task(
+            request, history=history, review_available=review_available
+        )
+        action = payload.get("action")
+        if action == "clarify":
+            return {"steps": [], "clarification": payload["message"]}, usage
+        steps_by_action = {
+            "answer": ["summary"],
+            "create_quiz": ["quiz"],
+            "review_mistakes": ["review"],
+            "practice_weak_topics": ["review", "practice"],
+            "study": ["summary", "quiz"],
+        }
+        if action not in steps_by_action:
+            # Preserve deliberately invalid fixture responses for application validation.
+            return payload, usage
+        steps = list(steps_by_action[action])
+        if action == "study" and payload.get("review_after_submit"):
+            steps.append("review")
+            if payload.get("practice_after_review"):
+                steps.append("practice")
+        plan: dict[str, Any] = {"steps": steps}
+        if "summary" in steps:
+            plan["summary_request"] = payload.get("summary_request") or request
+        if "quiz" in steps or "practice" in steps:
+            plan.update(title=payload["title"], config=payload["config"])
+        return plan, usage
+
+    async def answer_study(
+        self,
+        question: str,
+        sources: list[Evidence],
+        *,
+        history: list[dict[str, str]] | None = None,
+        mode: Literal["focused", "overview"] = "focused",
+        repair_feedback: dict[str, Any] | None = None,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        payload, usage = await self.answer(question, sources, history=history)
+        for claim in payload["claims"]:
+            claim.update(
+                title="Median and outliers",
+                explanation="Sort the values and select the middle position.",
+            )
+        return payload, {**usage, "prompt_version": STUDY_PROMPT_VERSION}
 
     async def embed(self, texts: list[str], *, query: bool = False) -> list[list[float]]:
         unrelated = [0.0] * 1023 + [1.0]

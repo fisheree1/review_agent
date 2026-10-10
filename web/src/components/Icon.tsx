@@ -1,6 +1,10 @@
 import type { SVGProps } from "react";
 
 export type IconName =
+  | "review"
+  | "shield"
+  | "user"
+  | "arrowRight"
   | "book"
   | "chat"
   | "check"
@@ -17,10 +21,16 @@ export type IconName =
   | "panel"
   | "plus"
   | "refresh"
+  | "send"
+  | "stop"
   | "sun"
   | "upload";
 
 const paths: Record<IconName, React.ReactNode> = {
+  review: <><path d="M3 10a9 9 0 1 1 1.8 7.5" /><path d="M3 4v6h6M12 7v5l3 2" /></>,
+  shield: <><path d="m12 3 8 3v6c0 5-8 9-8 9s-8-4-8-9V6l8-3Z" /><path d="m8.5 12 2.5 2.5 4.5-5" /></>,
+  user: <><circle cx="12" cy="8" r="4" /><path d="M4 21v-2a8 8 0 0 1 16 0v2" /></>,
+  arrowRight: <><path d="M4 12h16" /><path d="m14 6 6 6-6 6" /></>,
   book: <><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" /><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2Z" /></>,
   chat: <><path d="M20 11.5a8.5 8.5 0 0 1-8.5 8.5 9 9 0 0 1-3.6-.8L4 20l.8-3.9A8.5 8.5 0 1 1 20 11.5Z" /><path d="M8 11.5h8" /><path d="M8 14.5h5" /></>,
   check: <path d="m5 12 4 4L19 6" />,
@@ -37,6 +47,8 @@ const paths: Record<IconName, React.ReactNode> = {
   panel: <><rect width="18" height="18" x="3" y="3" rx="2" /><path d="M15 3v18" /></>,
   plus: <><path d="M12 5v14" /><path d="M5 12h14" /></>,
   refresh: <><path d="M20 11a8 8 0 0 0-15-4l-2 3" /><path d="M3 4v6h6" /><path d="M4 13a8 8 0 0 0 15 4l2-3" /><path d="M21 20v-6h-6" /></>,
+  send: <><path d="M12 19V5" /><path d="m5 12 7-7 7 7" /></>,
+  stop: <rect x="6" y="6" width="12" height="12" rx="2" />,
   sun: <><circle cx="12" cy="12" r="4" /><path d="M12 2v2" /><path d="M12 20v2" /><path d="m4.93 4.93 1.42 1.42" /><path d="m17.66 17.66 1.41 1.41" /><path d="M2 12h2" /><path d="M20 12h2" /><path d="m6.34 17.66-1.41 1.41" /><path d="m19.07 4.93-1.41 1.42" /></>,
   upload: <><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><path d="m17 8-5-5-5 5" /><path d="M12 3v12" /></>,
 };

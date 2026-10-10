@@ -2,7 +2,7 @@
 
 版本：0.1
 数据库：PostgreSQL 17 + pgvector
-状态：`0001`–`0007` 建立最小权限、资料摄取与统一引用定位；`0008_cited_rag` 增加版本化索引、1024 维分块和单资料问答任务；`0009_learning_core` 增加集合、连续对话、反馈、Quiz 与作答；`0010_user_auth` 增加正式账号、成员、密码哈希与服务端会话；`0011_version_purge_trigger` 修正来源版本删除的清理触发条件；`0012_quiz_agent_usage` 增加私有生成用量审计；`0013_conversation_tasks` 增加对话任务结果与同空间 Quiz 关联；`0014_agent_workflows` 增加组合学习运行、调用回执与作答修订保护；`0015_learning_organization` 增加对话分组、创建幂等键和个人学习打卡。
+状态：`0001`–`0007` 建立最小权限、资料摄取与统一引用定位；`0008_cited_rag` 增加版本化索引、1024 维分块和单资料问答任务；`0009_learning_core` 增加集合、连续对话、反馈、Quiz 与作答；`0010_user_auth` 增加正式账号、成员、密码哈希与服务端会话；`0011_version_purge_trigger` 修正来源版本删除的清理触发条件；`0012_quiz_agent_usage` 增加私有生成用量审计；`0013_conversation_tasks` 增加对话任务结果与同空间 Quiz 关联；`0014_agent_workflows` 增加组合学习运行、调用回执与作答修订保护；`0015_learning_organization` 增加对话分组、创建幂等键和个人学习打卡；`0016_conversation_memory` 增加可空的会话提示投影。
 
 ## 当前 RAG 实现与目标设计的差异
 
@@ -174,7 +174,7 @@ Embedding 维度不能模糊配置后直接上线。首个模型确定后固定 
 
 ### 5.4 集合、对话与引用（`0009`）
 
-`collections` 保存工作区内资料集合，`collection_documents` 使用复合外键约束集合和资料同属工作区。`conversations` 保存标题和当前范围快照；`conversation_messages` 各自保存提问时的范围、状态、校验后的回答和受限的模型用量信息。`answer_feedback` 对已完成消息保存单条反馈与幂等键。
+`collections` 保存工作区内资料集合，`collection_documents` 使用复合外键约束集合和资料同属工作区。`conversations` 保存标题和当前范围快照；`0016` 新增可空的 `memory` JSONB，内容限于版本号、完整资料版本范围和最多 700 字的对话提示。只有范围完全一致才读取，旧行无需回填，删除对话时一同清理。`conversation_messages` 各自保存提问时的范围、状态、校验后的回答和受限的模型用量信息。`answer_feedback` 对已完成消息保存单条反馈与幂等键。
 
 `0015` 的 `conversation_groups` 是组织历史对话的工作区内分组，与资料集合不同。`conversations.group_id` 可空，并以 `(group_id, workspace_id)` 复合外键约束同空间归属；删除分组只把对话移至未分组。删除对话会级联清理消息、反馈与关联的 Agent 运行；独立 Quiz 仍属于原工作区。`conversations.create_key` 是可空的创建幂等键，在工作区内唯一；`create_request` 只保存标题和所选资料/集合 ID 以识别同键不同请求，旧对话无需回填。新建对话可暂时没有资料范围，发送前必须先选定可用资料。历史列表用 `(workspace_id, updated_at DESC, id DESC)` 游标索引分页。
 
@@ -192,7 +192,7 @@ Quiz 保存工作区、标题、生成配置、原始请求范围、解析版本
 
 `0013_conversation_tasks` 为 `conversation_messages` 增加可空 `task_result` JSONB 和 `quiz_id`。结果保存类型、说明和公开资源 ID，不复制答案/解析；正文仍遵守学习记录隐私和删除策略。复合外键 `(quiz_id, workspace_id)` 指向 Quiz 所有权，禁止跨空间引用，删除 Quiz 时级联删除相关消息；`(workspace_id, quiz_id)` 索引支持引用清理。旧消息的新增字段保持 NULL，无回填。消息、已校验题目、Quiz 与用量在同一短事务内发布；模型/向量调用在事务外。复习查询按空间和精确范围限制已提交作答。
 
-组合学习 Agent 首次部署需先迁移至 `0014`；`0013` 是它的前一兼容基线。本地 `0015` 对话组织与打卡也须先迁移再启用对应代码，线上是否已升级以[部署记录](./deployment-fisher-ai.md)为准。应用回退保留兼容字段，停止新任务并等待在途任务结束；生产不使用会丢弃任务结果的 downgrade。隔离空库与上一 schema 的升级均须检查保留数据、Alembic 元数据和跨空间外键。
+组合学习 Agent 首次部署需先迁移至 `0014`；`0013` 是它的前一兼容基线。对话组织、打卡和新会话提示分别需 `0015`、`0016`。`0016` 仅加可空列，先迁移再启用新代码；旧代码可忽略该列，回退应用时保留它。线上是否已升级以[部署记录](./deployment-fisher-ai.md)为准。应用回退时停止新任务并等待在途任务结束；生产不使用会丢弃任务结果的 downgrade。隔离空库与上一 schema 的升级均须检查保留数据、Alembic 元数据和跨空间外键。
 
 #### `quiz_questions`
 
@@ -296,3 +296,27 @@ RLS 不能替代应用授权；后台任务、迁移和管理员连接要明确�
 ## 12. 0014 学习工作流
 
 新增 `agent_runs` 与 `agent_stage_executions`，使用复合 workspace 外键和调用序号唯一约束；运行关联对话、触发消息及实际 Quiz/attempt。新增作答 revision 默认为 0，旧请求可不传期望修订，新页面强制使用修订保护。迁移只新增表/列/约束，旧记录保持兼容。运行/阶段/租约字段不作为公共 API；JSONB 返回结果是需清理的私有内容。迁移和运行凭据仍分离，框架不能运行建表 setup。详细恢复与保留期见 [ADR-0002](./adr/0002-agent-business-checkpoints.md)。
+
+## 0017：个人长期复习
+
+`review_cards` 保存 `(workspace_id,user_id,question_id)` 唯一的个人卡片，关联题目及工作区成员的复合外键；删除题目或成员时级联删除。字段含 `due_at`（UTC）、`stage`（0–6）、`interval_days`（0–120）、`revision`（同时作为已复习次数）、`lapses` 和 `policy_version=spaced-review-v1`。队列索引为 `(workspace_id,user_id,due_at,id)`，另有 `(question_id,workspace_id)` 支持来源清理。新卡片立即到期，重复加入不改变排程。
+
+`review_events` 以 `(workspace_id,user_id,idempotency_key)` 唯一，复合外键绑定同成员的卡片。保存自评、期望 revision 及仅含 ID/日期/间隔/修订的结果快照；网络重放返回首次结果，即使卡片后来再次复习也不改变。事件不复制题干、答案或原文。卡片与事件同事务写入。
+
+迁移仅新增表和索引，不回填、不修改旧作答归属。新表沿用迁移角色的默认授权，运行角色不拥有 schema。现有版本删除触发器经 Quiz → Question → ReviewCard → ReviewEvent 清理派生记录；正在删除的来源通过查询过滤即时隐藏。验证入口 `python -m scripts.verify_spaced_review --isolated`，增加 `--previous` 验证 0016 → 0017，必须指向预装 pgvector 的空临时数据库。
+
+
+## v4 长文整理进度（复用现有 schema）
+
+每批仍以 `(run_id,stage,ordinal)` 唯一的 `agent_stage_executions` 防止重复外部调用，批次名最多 overview_7，每批只有 ordinal=0。已验证的累积答案保存在所属消息 answer，累计用量与策略版本在 message.usage；单一 summary output 保存覆盖计数，run.stage 保存下一批位置。合并、覆盖更新、回执清理及运行重新排队原子提交。选样由固定版本策略与不可变索引确定，恢复时无需保存原文副本或重新读已发布模型结果。旧 run.graph_version 固定原执行方式。取消清除未发布回执，保留已验证内容；删除来源仍清除对应消息和运行。
+
+
+### 知识点讲解 JSON 兼容扩展
+
+`conversation_messages.answer.claims[]` 增加可选 `title` / `explanation`，随原有已校验知识点保存，读取时缺失按 NULL 处理；无新增表、列、索引或迁移，不回填旧回答。敏感内容与原消息使用同一工作区权限及来源删除级联，不复制原文或创建独立缓存。发布新 API / Web 后部署新 Worker，使响应能携带新字段；旧回执按其旧提示版本恢复，旧 Web 可以显示核心要点但不会展示新增逐点讲解。回退 Worker 会恢复生成旧结构，新 Web 保持兼容。
+
+### v5 生成诊断与已收到错误的恢复
+
+复用 `agent_runs.usage` JSONB 的 `answer_validation`，无新增列或迁移。最多保留 16 条 `{stage,attempt,reason,point?,citation?,length?}`，尝试序号仅 0/1，原因使用固定白名单，位置/长度为有界整数；拒绝任意额外字段、文档文字、模型回答或供应商错误载荷。写入先检查工作区、活动运行和租约 fence，同 `(stage,attempt)` 重放不重复追加。
+
+每个生成调用仍使用 `(run_id,stage,ordinal)` 回执。已收到的截断/非法 JSON 以内部固定错误标记记录可靠用量，可在同范围有界修复；两次调用各记录实际收费，恢复只回放已收到结果，未知请求继续阻塞。模型返回的摘录编号在适配器内解析为准确 quote 后才保存，公共答案结构不增加 quote_id。发布/取消/删除沿用现有回执私有内容清理与来源级联；诊断没有原文副本。部署顺序与版本兼容见[架构第 17 节](./architecture.md#17-真实-pdf-评测后的生成可靠性study-graph-v5)。
