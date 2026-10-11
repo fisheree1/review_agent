@@ -60,3 +60,21 @@ def test_invalid_plan_cannot_skip_prerequisites_or_expand_tools(payload: dict) -
     with pytest.raises(RagFailure) as exc:
         validate_graph_task_plan(payload)
     assert exc.value.code == "TASK_PLAN_INVALID"
+
+
+def test_review_and_practice_plan_accepts_a_null_summary_mode() -> None:
+    # Real planners return summary_mode null when no summary step is requested.
+    plan = validate_graph_task_plan(
+        {
+            "steps": ["review", "practice"],
+            "summary_request": None,
+            "summary_mode": None,
+            "title": "Practice on weak topics",
+            "config": QUIZ,
+            "clarification": None,
+            "memory_summary": "",
+        }
+    )
+    assert plan.steps == ["review", "practice"] and plan.summary_mode == "focused"
+    with pytest.raises(RagFailure):
+        validate_graph_task_plan({"steps": ["summary"], "summary_mode": "everything"})

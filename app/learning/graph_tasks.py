@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from app.learning.conversation_tasks import QuizTaskConfig
 from app.learning.domain import validate_blueprint
@@ -25,6 +25,12 @@ class GraphTaskPlan(BaseModel):
     clarification: str | None = Field(default=None, min_length=2, max_length=600)
     # A conversation hint only. It never serves as source evidence or authorizes a write.
     memory_summary: str = Field(default="", max_length=700)
+
+    @field_validator("summary_mode", mode="before")
+    @classmethod
+    def default_summary_mode(cls, value: object) -> object:
+        # Planners send null when the plan has no summary step; it means the default mode.
+        return "focused" if value is None else value
 
     @model_validator(mode="after")
     def validate_steps(self) -> Self:
