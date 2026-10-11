@@ -199,7 +199,7 @@ React 前端位于 `web/`。服务端状态由 TanStack Query 管理，当前资
 
 ## 学习图开发与验证
 
-应用逻辑只依赖 `AgentRunPersistence` 等端口；SQLAlchemy 代码放在适配器，不向领域层导入。证据选取放在 `focused_answer`、`quiz_generation` 与 `scope.quiz_evidence`，新增检索方式先补评测再改动。修改图/Prompt/计划需提升相应版本，未知版本运行进入阻塞。调用预算跨恢复累计，严禁自动重发未知请求；阶段成果与恢复位置同事务。不开启包含原文的外部追踪。修改后的重点门禁为图单元、工作区隔离、PostgreSQL 恢复/删除、0013→0014 迁移及完整移动端流程，详见 [工作流设计](./agent-workflow-development.md#12-本次交付与设计调整)。
+应用逻辑只依赖 `AgentRunPersistence` 等端口；SQLAlchemy 代码放在适配器，不向领域层导入。证据选取放在 `focused_answer`、`quiz_generation` 与 `scope.quiz_evidence`，新增检索方式先补评测再改动。阶段流转只改 `run_flow.py` 的转移表并补表驱动测试，存储不自行判断下一步。修改图/Prompt/计划需提升相应版本；只保留生产在用版本与当前版本可执行，其他版本进入阻塞（[ADR-0004](./adr/0004-run-state-machine.md)）。调用预算跨恢复累计，严禁自动重发未知请求；阶段成果与恢复位置同事务。不开启包含原文的外部追踪。修改后的重点门禁为图单元、工作区隔离、PostgreSQL 恢复/删除、0013→0014 迁移及完整移动端流程，详见 [工作流设计](./agent-workflow-development.md#12-本次交付与设计调整)。
 
 ### 回放评测
 

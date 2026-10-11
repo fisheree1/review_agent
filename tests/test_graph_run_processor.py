@@ -6,7 +6,6 @@ from uuid import uuid4
 
 import pytest
 
-from app.learning.api import StudyAnswerResponse
 from app.learning.application import LearningModel
 from app.learning.graph_tasks import GraphTaskPlan
 from app.learning.run_application import AgentRunProcessor
@@ -62,73 +61,35 @@ def test_graph_planner_uses_same_scope_memory_and_validates_composable_steps() -
     store.publish_pdf.assert_not_awaited()
 
 
-def test_legacy_overview_summary_validates_quote_before_publication() -> None:
+@pytest.mark.parametrize("version", ["study-graph-v2", "study-graph-v3", "study-graph-v4"])
+def test_unsupported_versions_fail_without_model_calls(version: str) -> None:
+    # Only the production legacy version and the current version keep executable paths.
     worker, store, model = setup("summary", {"summary_mode": "overview"})
-    source = Evidence(
-        uuid4(),
-        "The median resists extreme values.",
-        3,
-        {"kind": "page", "position": 3, "title": None, "path": []},
-        document_id=uuid4(),
-        version_id=1,
-    )
-    store.claim.return_value["graph_version"] = "study-graph-v3"
-    store.overview_sources.return_value = ([source], {"sampled_pages": 1, "indexed_pages": 44})
-    model.answer_study.return_value = (
-        {
-            "insufficient_evidence": False,
-            "claims": [
-                {
-                    "text": "The median resists outliers.",
-                    "citations": [{"source_id": str(source.id), "quote": source.content}],
-                }
-            ],
-            "explanation": (
-                "A median is the middle value after sorting, so extremes have less influence."
-            ),
-        },
-        {**USAGE, "prompt_version": "pdf-knowledge-explanation-v1"},
-    )
-    asyncio.run(worker.process_next())
-    answer = store.publish_summary.call_args.args[2]
-    assert StudyAnswerResponse.model_validate(answer).explanation == answer["explanation"]
-    assert answer["claims"][0]["citations"][0]["version_id"] == 1
-    assert answer["explanation"].startswith("A median is the middle value")
-    assert store.publish_summary.call_args.args[4] == {
-        "sampled_pages": 1,
-        "indexed_pages": 44,
-    }
-    worker, store, model = setup("summary", {"summary_mode": "overview"})
-    store.claim.return_value["graph_version"] = "study-graph-v3"
-    store.overview_sources.return_value = ([source], {"sampled_pages": 1, "indexed_pages": 44})
-    model.answer_study.return_value = (
-        {
-            "insufficient_evidence": False,
-            "claims": [
-                {
-                    "text": "Unsupported",
-                    "citations": [{"source_id": str(source.id), "quote": "invented quotation"}],
-                }
-            ],
-        },
-        USAGE,
-    )
-    asyncio.run(worker.process_next())
-    store.publish_summary.assert_not_awaited()
-    store.fail.assert_awaited_once()
-
-
-@pytest.mark.parametrize("version", ["study-graph-v1", "study-graph-v2"])
-def test_older_focused_questions_resume_on_deterministic_retrieval(version: str) -> None:
-    # In-flight v1/v2 runs no longer need the removed model-driven tool loop.
-    worker, store, model = setup("summary", {"summary_mode": "focused"})
     store.claim.return_value["graph_version"] = version
+    asyncio.run(worker.process_next())
+    assert store.fail.call_args.args[2] == "RUN_VERSION_UNSUPPORTED"
+    model.answer_study.assert_not_awaited()
+    worker.embeddings.embed.assert_not_awaited()
+    store.publish_summary.assert_not_awaited()
+
+
+def test_legacy_runs_cannot_reach_composable_only_stages() -> None:
+    worker, store, _ = setup("pdf", {"action": "answer"})
+    store.claim.return_value["graph_version"] = "study-graph-v1"
+    asyncio.run(worker.process_next())
+    store.publish_pdf.assert_not_awaited()
+    assert store.fail.call_args.args[2] == "RUN_VERSION_UNSUPPORTED"
+
+
+def test_legacy_focused_question_resumes_on_deterministic_retrieval() -> None:
+    # In-flight production v1 runs no longer need the removed model-driven tool loop.
+    worker, store, model = setup("summary", {"action": "answer"})
+    store.claim.return_value["graph_version"] = "study-graph-v1"
     worker.embeddings.embed.return_value = [[1.0] + [0.0] * 1023]
     store.sources.return_value = []
     asyncio.run(worker.process_next())
     store.fail.assert_not_awaited()
     model.answer_study.assert_not_awaited()
-    store.overview_sources.assert_not_awaited()
     assert store.publish_summary.call_args.args[2]["insufficient_evidence"] is True
 
 
@@ -151,10 +112,8 @@ def test_v3_focused_stage_bypasses_tool_planning_and_uses_recorded_calls() -> No
     assert store.publish_summary.call_args.args[3]["graph_version"] == GRAPH_VERSION
 
 
-@pytest.mark.parametrize("version", ["study-graph-v4", GRAPH_VERSION])
-def test_overview_versions_resume_one_bounded_batch_and_keep_its_citations(version: str) -> None:
+def test_overview_resumes_one_bounded_batch_and_keeps_its_citations() -> None:
     worker, store, model = setup("overview_2", {"summary_mode": "overview"})
-    store.claim.return_value["graph_version"] = version
     source = Evidence(
         uuid4(),
         "The median resists extreme values.",
@@ -191,7 +150,6 @@ def test_overview_versions_resume_one_bounded_batch_and_keep_its_citations(versi
     asyncio.run(worker.process_next())
     store.fail.assert_not_awaited()
     model.answer_study.assert_awaited_once()
-    store.overview_sources.assert_not_awaited()
     assert store.publish_summary.call_args.args[2]["claims"][0]["citations"][0]["unit"] == 120
     assert store.publish_summary.call_args.args[4] == coverage
     assert model.answer_study.call_args.kwargs["mode"] == "overview"
@@ -246,3 +204,11 @@ def test_quiz_stage_uses_one_generation_on_application_selected_evidence() -> No
     assert [call.args[3] for call in store.begin_call.call_args_list] == ["generate_quiz"]
     questions, usage = store.publish_quiz.call_args.args[3:5]
     assert len(questions) == 1 and usage["model_calls"] == 1
+
+
+def test_stage_reports_measured_time_against_its_own_reservation() -> None:
+    worker, store, _ = setup("pdf", {"steps": ["summary", "pdf"]})
+    store.claim.return_value["reserved_seconds"] = 15
+    asyncio.run(worker.process_next())
+    run_id, seconds, reserved = store.record_duration.call_args.args
+    assert reserved == 15 and 0 <= seconds < 15

@@ -6,25 +6,33 @@ import asyncio
 import logging
 import time
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from typing import Any, Literal
 from uuid import UUID
 
 from app.core.errors import ApplicationError
-from app.learning.agent import AgentBudget
+from app.learning.agent import AgentBudget, RunCheck, SourceSearch
 from app.learning.application import LearningModel
 from app.learning.conversation_tasks import TASK_VERSION, validate_task_plan
 from app.learning.focused_answer import answer_focused
 from app.learning.graph_tasks import GRAPH_TASK_VERSION, validate_graph_task_plan
 from app.learning.overview import OVERVIEW_VERSION, overview_batch_index
-from app.learning.quiz_generation import generate_scoped_quiz
-from app.learning.study_generation import generate_study
-from app.learning.workflow import (
-    BATCHED_GRAPH_VERSIONS,
-    COMPOSABLE_GRAPH_VERSIONS,
-    GRAPH_VERSION,
-    AgentRunPersistence,
+from app.learning.quiz_generation import QuizSources, generate_scoped_quiz
+from app.learning.run_flow import (
+    GRADE,
+    OVERVIEW_PREFIX,
+    PDF,
+    PLAN,
+    QUIZ,
+    REPLAN,
+    REVIEW,
+    STAGE_TIMEOUT_SECONDS,
+    SUMMARY,
+    WEAK,
 )
-from app.rag.domain import STUDY_PROMPT_VERSION, Evidence, RagFailure, validate_study_answer
+from app.learning.study_generation import ValidationRecorder, generate_study
+from app.learning.workflow import SUPPORTED_GRAPH_VERSIONS, AgentRunPersistence, is_composable
+from app.rag.domain import Evidence, RagFailure
 from app.rag.ports import Embeddings
 
 logger = logging.getLogger(__name__)
@@ -180,6 +188,32 @@ class RecordedEmbeddings:
         return list(result)
 
 
+@dataclass(frozen=True, slots=True)
+class StageContext:
+    """Everything one claimed stage may use; every external call goes through receipts."""
+
+    task: dict[str, Any]
+    run_id: UUID
+    fence: UUID
+    models: RecordedModels
+    embeddings: RecordedEmbeddings
+    ensure_active: RunCheck
+    search: SourceSearch
+    quiz_sources: QuizSources
+    record_validation: ValidationRecorder
+
+    @property
+    def composable(self) -> bool:
+        return is_composable(self.task["graph_version"])
+
+    @property
+    def plan(self) -> dict[str, Any]:
+        return self.task["plan"] or {}
+
+
+StageHandler = Callable[[StageContext], Awaitable[None]]
+
+
 class AgentRunProcessor:
     def __init__(
         self,
@@ -189,6 +223,21 @@ class AgentRunProcessor:
     ) -> None:
         self.store, self.embeddings, self.model = store, embeddings, model
 
+    def _handler(self, stage: str, *, composable: bool) -> StageHandler | None:
+        if stage in (PLAN, REPLAN):
+            return self._plan
+        if stage == SUMMARY or (composable and stage.startswith(OVERVIEW_PREFIX)):
+            return self._summary
+        handlers: dict[str, StageHandler] = {
+            QUIZ: self._quiz,
+            WEAK: self._quiz,
+            REVIEW: self._review,
+            GRADE: self._grade,
+        }
+        if composable:
+            handlers[PDF] = self._pdf
+        return handlers.get(stage)
+
     async def process_next(self) -> bool:
         task = await self.store.claim()
         if task is None:
@@ -196,8 +245,6 @@ class AgentRunProcessor:
         run_id, fence = UUID(task["id"]), task["fence"]
         started = time.monotonic()
         calls = RecordedCalls(self.store, run_id, fence)
-        models = RecordedModels(self.model, calls)
-        embeddings = RecordedEmbeddings(self.embeddings, calls)
 
         async def ensure_active() -> None:
             await self.store.ensure_active(run_id, fence)
@@ -211,146 +258,27 @@ class AgentRunProcessor:
         async def record_validation(attempt: int, diagnosis: dict[str, Any]) -> None:
             await self.store.record_answer_validation(run_id, fence, attempt, diagnosis)
 
+        context = StageContext(
+            task=task,
+            run_id=run_id,
+            fence=fence,
+            models=RecordedModels(self.model, calls),
+            embeddings=RecordedEmbeddings(self.embeddings, calls),
+            ensure_active=ensure_active,
+            search=search,
+            quiz_sources=quiz_sources,
+            record_validation=record_validation,
+        )
         try:
-            async with asyncio.timeout(110):
-                stage = task["stage"]
-                if stage in ("plan", "replan"):
-                    request = task["request"]
-                    if task["response"]:
-                        request += "\n用户补充：" + task["response"]
-                    review = await self.store.review(run_id, fence)
-                    if task["graph_version"] in COMPOSABLE_GRAPH_VERSIONS:
-                        payload, _usage = await models.plan_graph_task(
-                            request,
-                            history=task["history"],
-                            review_available=review is not None,
-                            memory_summary=task["memory_summary"],
-                        )
-                        await self.store.save_plan(run_id, fence, validate_graph_task_plan(payload))
-                    else:
-                        payload, _usage = await models.plan_task(
-                            request, history=task["history"], review_available=review is not None
-                        )
-                        await self.store.save_plan(run_id, fence, validate_task_plan(payload))
-                elif stage == "summary" or (
-                    task["graph_version"] in BATCHED_GRAPH_VERSIONS
-                    and stage.startswith("overview_")
-                ):
-                    question = (task["plan"] or {}).get("summary_request") or task["request"]
-                    if (
-                        task["graph_version"] in BATCHED_GRAPH_VERSIONS
-                        and (task["plan"] or {}).get("summary_mode") == "overview"
-                    ):
-                        batch = overview_batch_index(stage)
-                        sources, coverage = await self.store.overview_batch(run_id, fence)
-                        if sources and task["graph_version"] == GRAPH_VERSION:
-                            result, usage = await generate_study(
-                                f"{question}\n整理当前第 {batch + 1} 批资料中的独立知识点，"
-                                "兼顾本批各页的定义、方法、条件和例子；不要声称覆盖未提供页面。",
-                                sources,
-                                task["history"],
-                                model=models,
-                                budget=AgentBudget(),
-                                ensure_active=ensure_active,
-                                mode="overview",
-                                record_validation=record_validation,
-                            )
-                        elif sources:
-                            await ensure_active()
-                            raw, usage = await models.answer_study(
-                                f"{question}\n整理当前第 {batch + 1} 批资料中的独立知识点，"
-                                "兼顾本批各页的定义、方法、条件和例子；不要声称覆盖未提供页面。",
-                                sources,
-                                history=task["history"],
-                                mode="overview",
-                            )
-                            AgentBudget().charge(usage)
-                            result = validate_study_answer(
-                                raw,
-                                sources,
-                                require_sections=usage.get("prompt_version")
-                                == STUDY_PROMPT_VERSION,
-                            )
-                        else:
-                            result, usage = {"insufficient_evidence": True, "claims": []}, {}
-                        await ensure_active()
-                        await self.store.publish_summary(
-                            run_id,
-                            fence,
-                            result,
-                            {**usage, "overview_version": OVERVIEW_VERSION},
-                            coverage,
-                        )
-                    elif (
-                        task["graph_version"] in COMPOSABLE_GRAPH_VERSIONS
-                        and (task["plan"] or {}).get("summary_mode") == "overview"
-                    ):
-                        sources, coverage = await self.store.overview_sources(run_id, fence)
-                        if sources:
-                            raw, usage = await models.answer_study(
-                                question, sources, history=task["history"]
-                            )
-                            result = validate_study_answer(
-                                raw,
-                                sources,
-                                require_sections=usage.get("prompt_version")
-                                == STUDY_PROMPT_VERSION,
-                            )
-                        else:
-                            result, usage = {"insufficient_evidence": True, "claims": []}, {}
-                        await ensure_active()
-                        await self.store.publish_summary(run_id, fence, result, usage, coverage)
-                    else:
-                        # Every focused summary uses one scoped retrieval and one generation.
-                        result, usage = await answer_focused(
-                            question,
-                            task["history"],
-                            embeddings=embeddings,
-                            model=models,
-                            search=search,
-                            ensure_active=ensure_active,
-                            reliable=task["graph_version"] == GRAPH_VERSION,
-                            record_validation=record_validation,
-                        )
-                        usage["graph_version"] = task["graph_version"]
-                        await self.store.publish_summary(run_id, fence, result, usage)
-                elif stage == "pdf":
-                    await self.store.publish_pdf(run_id, fence)
-                elif stage in ("quiz", "weak"):
-                    if task["graph_version"] in COMPOSABLE_GRAPH_VERSIONS:
-                        plan = validate_graph_task_plan(
-                            {k: v for k, v in task["plan"].items() if k != "weak_topics"}
-                        )
-                        config = plan.quiz_config(
-                            task["plan"].get("weak_topics") if stage == "weak" else None
-                        )
-                    else:
-                        legacy_plan = validate_task_plan(
-                            {k: v for k, v in task["plan"].items() if k != "weak_topics"}
-                        )
-                        config = legacy_plan.quiz_config(task["plan"].get("weak_topics"))
-                    if stage == "weak":
-                        config["topic"] = "、".join(task["plan"]["weak_topics"])[:120]
-                    await self.store.reserve_quiz(run_id, fence)
-                    questions, usage = await generate_scoped_quiz(
-                        config,
-                        embeddings=embeddings,
-                        model=models,
-                        sources=quiz_sources,
-                        ensure_active=ensure_active,
-                    )
-                    usage["graph_version"] = task["graph_version"]
-                    await self.store.publish_quiz(run_id, fence, config, questions, usage)
-                elif stage == "review":
-                    review = await self.store.review(run_id, fence)
-                    await self.store.publish_review(run_id, fence, review)
-                elif stage == "grade":
-                    attempt, items = await self.store.grading_items(run_id, fence)
-                    grades = await models.grade(items)
-                    await ensure_active()
-                    await self.store.finish_grading(attempt, fence, grades)
-                else:
-                    raise RagFailure("RUN_VERSION_UNSUPPORTED", "运行阶段不可识别")
+            handler = (
+                self._handler(task["stage"], composable=context.composable)
+                if task["graph_version"] in SUPPORTED_GRAPH_VERSIONS
+                else None
+            )
+            if handler is None:
+                raise RagFailure("RUN_VERSION_UNSUPPORTED", "运行阶段不可识别")
+            async with asyncio.timeout(STAGE_TIMEOUT_SECONDS):
+                await handler(context)
         except RagFailure as exc:
             await self.store.fail(run_id, fence, exc.code)
         except ApplicationError as exc:
@@ -361,5 +289,110 @@ class AgentRunProcessor:
             logger.error("agent_stage_failed id=%s error_type=%s", run_id, type(exc).__name__)
             await self.store.fail(run_id, fence, "ANSWER_FAILED")
         finally:
-            await self.store.record_duration(run_id, time.monotonic() - started)
+            await self.store.record_duration(
+                run_id,
+                time.monotonic() - started,
+                task.get("reserved_seconds", STAGE_TIMEOUT_SECONDS),
+            )
         return True
+
+    async def _plan(self, ctx: StageContext) -> None:
+        task = ctx.task
+        request = task["request"]
+        if task["response"]:
+            request += "\n用户补充：" + task["response"]
+        review = await self.store.review(ctx.run_id, ctx.fence)
+        if ctx.composable:
+            payload, _ = await ctx.models.plan_graph_task(
+                request,
+                history=task["history"],
+                review_available=review is not None,
+                memory_summary=task["memory_summary"],
+            )
+            await self.store.save_plan(ctx.run_id, ctx.fence, validate_graph_task_plan(payload))
+            return
+        payload, _ = await ctx.models.plan_task(
+            request, history=task["history"], review_available=review is not None
+        )
+        await self.store.save_plan(ctx.run_id, ctx.fence, validate_task_plan(payload))
+
+    async def _summary(self, ctx: StageContext) -> None:
+        question = ctx.plan.get("summary_request") or ctx.task["request"]
+        if ctx.composable and ctx.plan.get("summary_mode") == "overview":
+            await self._overview_batch(ctx, question)
+            return
+        # Every focused summary uses one scoped retrieval and one generation.
+        result, usage = await answer_focused(
+            question,
+            ctx.task["history"],
+            embeddings=ctx.embeddings,
+            model=ctx.models,
+            search=ctx.search,
+            ensure_active=ctx.ensure_active,
+            reliable=ctx.composable,
+            record_validation=ctx.record_validation,
+        )
+        usage["graph_version"] = ctx.task["graph_version"]
+        await self.store.publish_summary(ctx.run_id, ctx.fence, result, usage)
+
+    async def _overview_batch(self, ctx: StageContext, question: str) -> None:
+        batch = overview_batch_index(ctx.task["stage"])
+        sources, coverage = await self.store.overview_batch(ctx.run_id, ctx.fence)
+        if sources:
+            result, usage = await generate_study(
+                f"{question}\n整理当前第 {batch + 1} 批资料中的独立知识点，"
+                "兼顾本批各页的定义、方法、条件和例子；不要声称覆盖未提供页面。",
+                sources,
+                ctx.task["history"],
+                model=ctx.models,
+                budget=AgentBudget(),
+                ensure_active=ctx.ensure_active,
+                mode="overview",
+                record_validation=ctx.record_validation,
+            )
+        else:
+            result, usage = {"insufficient_evidence": True, "claims": []}, {}
+        await ctx.ensure_active()
+        await self.store.publish_summary(
+            ctx.run_id,
+            ctx.fence,
+            result,
+            {**usage, "overview_version": OVERVIEW_VERSION},
+            coverage,
+        )
+
+    async def _pdf(self, ctx: StageContext) -> None:
+        await self.store.publish_pdf(ctx.run_id, ctx.fence)
+
+    async def _quiz(self, ctx: StageContext) -> None:
+        stage, plan = ctx.task["stage"], ctx.plan
+        weak_topics = plan.get("weak_topics")
+        task_plan = {key: value for key, value in plan.items() if key != "weak_topics"}
+        if ctx.composable:
+            config = validate_graph_task_plan(task_plan).quiz_config(
+                weak_topics if stage == WEAK else None
+            )
+        else:
+            config = validate_task_plan(task_plan).quiz_config(weak_topics)
+        if stage == WEAK:
+            config["topic"] = "、".join(plan["weak_topics"])[:120]
+        await self.store.reserve_quiz(ctx.run_id, ctx.fence)
+        questions, usage = await generate_scoped_quiz(
+            config,
+            embeddings=ctx.embeddings,
+            model=ctx.models,
+            sources=ctx.quiz_sources,
+            ensure_active=ctx.ensure_active,
+        )
+        usage["graph_version"] = ctx.task["graph_version"]
+        await self.store.publish_quiz(ctx.run_id, ctx.fence, config, questions, usage)
+
+    async def _review(self, ctx: StageContext) -> None:
+        review = await self.store.review(ctx.run_id, ctx.fence)
+        await self.store.publish_review(ctx.run_id, ctx.fence, review)
+
+    async def _grade(self, ctx: StageContext) -> None:
+        attempt, items = await self.store.grading_items(ctx.run_id, ctx.fence)
+        grades = await ctx.models.grade(items)
+        await ctx.ensure_active()
+        await self.store.finish_grading(attempt, ctx.fence, grades)

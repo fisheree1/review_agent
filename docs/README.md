@@ -29,6 +29,7 @@
 - [ADR-0001：PostgreSQL 文档任务](./adr/0001-postgresql-document-jobs.md)：当前任务投递方案与迁移门槛。
 - [ADR-0002：Agent 业务检查点](./adr/0002-agent-business-checkpoints.md)：恢复、未知调用和清理的决策。
 - [ADR-0003：确定性证据选取](./adr/0003-deterministic-evidence.md)：移除模型工具循环与 LangGraph 的原因、收益和部署影响。
+- [ADR-0004：运行状态机与版本保留](./adr/0004-run-state-machine.md)：领域转移表、只保留两个可执行版本和按实测计时。
 - [工程审查记录](./project-review.md)：一次性审查结论，不代替持续更新的实现状态。
 
 ## 待确认的产品与运维决策
