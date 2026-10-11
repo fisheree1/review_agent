@@ -1,4 +1,4 @@
-"""Recoverable learning stages using typed executor and persisted call receipts."""
+"""Recoverable learning stages using deterministic evidence and persisted call receipts."""
 
 from __future__ import annotations
 
@@ -16,14 +16,13 @@ from app.learning.conversation_tasks import TASK_VERSION, validate_task_plan
 from app.learning.focused_answer import answer_focused
 from app.learning.graph_tasks import GRAPH_TASK_VERSION, validate_graph_task_plan
 from app.learning.overview import OVERVIEW_VERSION, overview_batch_index
+from app.learning.quiz_generation import generate_scoped_quiz
 from app.learning.study_generation import generate_study
 from app.learning.workflow import (
     BATCHED_GRAPH_VERSIONS,
     COMPOSABLE_GRAPH_VERSIONS,
-    FAST_GRAPH_VERSIONS,
     GRAPH_VERSION,
     AgentRunPersistence,
-    StudyExecutor,
 )
 from app.rag.domain import STUDY_PROMPT_VERSION, Evidence, RagFailure, validate_study_answer
 from app.rag.ports import Embeddings
@@ -140,31 +139,6 @@ class RecordedModels:
         )
         return result[0], result[1]
 
-    async def plan_step(
-        self, question: str, *, history: list[dict[str, str]], observations: list[dict[str, Any]]
-    ) -> tuple[dict[str, Any], dict[str, Any]]:
-        result = await self.calls.invoke(
-            "plan_step",
-            lambda: self.models.plan_step(question, history=history, observations=observations),
-        )
-        return result[0], result[1]
-
-    async def plan_quiz_step(
-        self, config: dict[str, Any], *, observations: list[dict[str, Any]]
-    ) -> tuple[dict[str, Any], dict[str, Any]]:
-        result = await self.calls.invoke(
-            "plan_quiz_step", lambda: self.models.plan_quiz_step(config, observations=observations)
-        )
-        return result[0], result[1]
-
-    async def answer(
-        self, question: str, sources: list[Evidence], *, history: list[dict[str, str]] | None = None
-    ) -> tuple[dict[str, Any], dict[str, Any]]:
-        result = await self.calls.invoke(
-            "answer", lambda: self.models.answer(question, sources, history=history)
-        )
-        return result[0], result[1]
-
     async def answer_study(
         self,
         question: str,
@@ -212,9 +186,8 @@ class AgentRunProcessor:
         store: AgentRunPersistence,
         embeddings: Embeddings,
         model: LearningModel,
-        executor: StudyExecutor,
     ) -> None:
-        self.store, self.embeddings, self.model, self.executor = store, embeddings, model, executor
+        self.store, self.embeddings, self.model = store, embeddings, model
 
     async def process_next(self) -> bool:
         task = await self.store.claim()
@@ -231,6 +204,9 @@ class AgentRunProcessor:
 
         async def search(vector: list[float], query: str) -> list[Evidence]:
             return await self.store.sources(run_id, fence, vector, query)
+
+        async def quiz_sources(vector: list[float] | None, topic: str) -> list[Evidence]:
+            return await self.store.quiz_sources(run_id, fence, vector, topic)
 
         async def record_validation(attempt: int, diagnosis: dict[str, Any]) -> None:
             await self.store.record_answer_validation(run_id, fence, attempt, diagnosis)
@@ -324,7 +300,8 @@ class AgentRunProcessor:
                             result, usage = {"insufficient_evidence": True, "claims": []}, {}
                         await ensure_active()
                         await self.store.publish_summary(run_id, fence, result, usage, coverage)
-                    elif task["graph_version"] in FAST_GRAPH_VERSIONS:
+                    else:
+                        # Every focused summary uses one scoped retrieval and one generation.
                         result, usage = await answer_focused(
                             question,
                             task["history"],
@@ -334,18 +311,6 @@ class AgentRunProcessor:
                             ensure_active=ensure_active,
                             reliable=task["graph_version"] == GRAPH_VERSION,
                             record_validation=record_validation,
-                        )
-                        usage["graph_version"] = task["graph_version"]
-                        await self.store.publish_summary(run_id, fence, result, usage)
-                    else:
-                        result, usage = await self.executor.answer(
-                            question,
-                            task["history"],
-                            embeddings=embeddings,
-                            model=models,
-                            search=search,
-                            ensure_active=ensure_active,
-                            budget=AgentBudget(),
                         )
                         usage["graph_version"] = task["graph_version"]
                         await self.store.publish_summary(run_id, fence, result, usage)
@@ -367,13 +332,12 @@ class AgentRunProcessor:
                     if stage == "weak":
                         config["topic"] = "、".join(task["plan"]["weak_topics"])[:120]
                     await self.store.reserve_quiz(run_id, fence)
-                    questions, usage = await self.executor.quiz(
+                    questions, usage = await generate_scoped_quiz(
                         config,
                         embeddings=embeddings,
                         model=models,
-                        search=search,
+                        sources=quiz_sources,
                         ensure_active=ensure_active,
-                        budget=AgentBudget(),
                     )
                     usage["graph_version"] = task["graph_version"]
                     await self.store.publish_quiz(run_id, fence, config, questions, usage)

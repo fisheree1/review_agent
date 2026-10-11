@@ -15,9 +15,9 @@ from uuid import NAMESPACE_URL, uuid5
 import httpx
 
 from app.core.config import ModelSettings
-from app.learning.agent import AgentBudget
 from app.learning.conversation_tasks import validate_task_plan
-from app.learning.infrastructure.langgraph_workflow import LangGraphStudyExecutor
+from app.learning.focused_answer import answer_focused
+from app.learning.quiz_generation import generate_scoped_quiz
 from app.learning.workflow import check_run_budget
 from app.rag.domain import Evidence
 from app.rag.providers import CloudModels
@@ -46,6 +46,9 @@ async def evaluate() -> dict[str, Any]:
     async def search(vector: list[float], query: str) -> list[Evidence]:
         return sources
 
+    async def quiz_sources(vector: list[float] | None, topic: str) -> list[Evidence]:
+        return sources
+
     async with httpx.AsyncClient(timeout=httpx.Timeout(45, connect=10)) as client:
         models = CloudModels(ModelSettings(), client)
         request = (
@@ -59,25 +62,22 @@ async def evaluate() -> dict[str, Any]:
         assert plan.action == "study" and plan.review_after_submit and plan.practice_after_review
         config = plan.quiz_config()
         assert config["type_counts"] == {"single": 1, "multiple": 0, "true_false": 0, "short": 1}
-        graph = LangGraphStudyExecutor()
-        summary, usage = await graph.answer(
+        summary, usage = await answer_focused(
             plan.summary_request or request,
             [],
             model=models,
             embeddings=models,
             search=search,
             ensure_active=active,
-            budget=AgentBudget(),
         )
         usages.append(usage)
         assert not summary["insufficient_evidence"] and summary["claims"]
-        questions, usage = await graph.quiz(
+        questions, usage = await generate_scoped_quiz(
             config,
             model=models,
             embeddings=models,
-            search=search,
+            sources=quiz_sources,
             ensure_active=active,
-            budget=AgentBudget(),
         )
         usages.append(usage)
         assert len(questions) == 2 and {q["kind"] for q in questions} == {"single", "short"}
@@ -99,13 +99,12 @@ async def evaluate() -> dict[str, Any]:
         assert grades[0]["score"] < 0.7
         weak_config = plan.quiz_config([short["topic"]])
         weak_config["topic"] = short["topic"][:120]
-        weak, usage = await graph.quiz(
+        weak, usage = await generate_scoped_quiz(
             weak_config,
             model=models,
             embeddings=models,
-            search=search,
+            sources=quiz_sources,
             ensure_active=active,
-            budget=AgentBudget(),
         )
         usages.append(usage)
         assert weak

@@ -19,9 +19,7 @@ import httpx
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.core.config import ModelSettings
-from app.learning.agent import AgentBudget, run_scoped_agent
 from app.learning.focused_answer import answer_focused
-from app.learning.infrastructure.langgraph_workflow import LangGraphStudyExecutor
 from app.rag.domain import Evidence, RagFailure, validate_answer
 from app.rag.providers import CloudModels
 from scripts.evaluate_rag import cosine
@@ -100,7 +98,7 @@ class ScopedSyntheticSearch:
         return matches
 
 
-async def compare(fixture: Fixture, *, engine: str = "legacy") -> dict[str, Any]:
+async def compare(fixture: Fixture) -> dict[str, Any]:
     results: list[dict[str, Any]] = []
     async with httpx.AsyncClient(follow_redirects=False) as client:
         model = CloudModels(ModelSettings(), client)
@@ -134,30 +132,14 @@ async def compare(fixture: Fixture, *, engine: str = "legacy") -> dict[str, Any]
                             async def ensure_active() -> None:
                                 return None
 
-                            execute = (
-                                LangGraphStudyExecutor().answer
-                                if engine == "langgraph"
-                                else run_scoped_agent
+                            answer, usage = await answer_focused(
+                                case.question,
+                                case.history,
+                                embeddings=model,
+                                model=model,
+                                search=search,
+                                ensure_active=ensure_active,
                             )
-                            if engine == "focused":
-                                answer, usage = await answer_focused(
-                                    case.question,
-                                    case.history,
-                                    embeddings=model,
-                                    model=model,
-                                    search=search,
-                                    ensure_active=ensure_active,
-                                )
-                            else:
-                                answer, usage = await execute(
-                                    case.question,
-                                    case.history,
-                                    embeddings=model,
-                                    model=model,
-                                    search=search,
-                                    ensure_active=ensure_active,
-                                    budget=AgentBudget(),
-                                )
                         else:
                             query = (
                                 " ".join([case.history[-1]["question"], case.question])
@@ -191,7 +173,7 @@ async def compare(fixture: Fixture, *, engine: str = "legacy") -> dict[str, Any]
                 results.append(result)
     return {
         "version": fixture.version,
-        "engine": engine,
+        "engine": "focused",
         "retriever": "scoped-synthetic-cosine-v1",
         "results": results,
     }
@@ -201,7 +183,6 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--live", action="store_true", help="Call paid model providers")
     parser.add_argument("--output", type=Path, help="Write a content-free comparison report")
-    parser.add_argument("--engine", choices=["legacy", "langgraph", "focused"], default="legacy")
     parser.add_argument("--case-limit", type=int, choices=range(1, 21), default=20)
     args = parser.parse_args()
     fixture = Fixture.model_validate_json(EVAL_PATH.read_text(encoding="utf-8"))
@@ -209,7 +190,7 @@ def main() -> int:
         print(f"Validated {fixture.version}: {len(fixture.cases)} cases; no model calls.")
         return 0
     fixture.cases = fixture.cases[: args.case_limit]
-    report = asyncio.run(compare(fixture, engine=args.engine))
+    report = asyncio.run(compare(fixture))
     if args.output:
         args.output.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     for mode in ("baseline", "agent"):

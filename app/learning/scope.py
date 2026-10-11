@@ -240,6 +240,15 @@ async def retrieve_sources(
     return result
 
 
+def spread_positions(total: int, count: int) -> list[int]:
+    """Evenly spaced 0-based positions so a Quiz samples a whole document, not its opening."""
+    if total <= 0 or count <= 0:
+        return []
+    if count >= total:
+        return list(range(total))
+    return sorted({(2 * index + 1) * total // (2 * count) for index in range(count)})
+
+
 async def quiz_sources(
     session: AsyncSession,
     workspace: int,
@@ -250,6 +259,8 @@ async def quiz_sources(
 ) -> list[Evidence]:
     """Choose bounded, distributed evidence for a quiz blueprint without model-side tool access."""
     versions = [item["version_id"] for item in snapshot]
+    if not versions:
+        return []
     query = (
         select(
             DocumentChunk,
@@ -289,13 +300,22 @@ async def quiz_sources(
             DocumentChunk.embedding.is_not(None),
         )
     )
+    # Each document gets a fair share, spread across its whole length.
+    quota = -(-limit // len(versions))
     per_document: dict[UUID, list[Evidence]] = defaultdict(list)
     for version in versions:
+        scoped = query.where(DocumentIndex.document_version_id == version)
+        chunk_ids = (
+            await session.scalars(
+                scoped.with_only_columns(DocumentChunk.id).order_by(DocumentChunk.ordinal)
+            )
+        ).all()
+        picked = [chunk_ids[position] for position in spread_positions(len(chunk_ids), quota)]
+        if not picked:
+            continue
         rows = (
             await session.execute(
-                query.where(DocumentIndex.document_version_id == version)
-                .order_by(DocumentChunk.ordinal)
-                .limit(limit)
+                scoped.where(DocumentChunk.id.in_(picked)).order_by(DocumentChunk.ordinal)
             )
         ).all()
         for chunk, page, document_id, version_id in rows:
@@ -316,3 +336,21 @@ async def quiz_sources(
             if per_document[document_id] and len(result) < limit:
                 result.append(per_document[document_id].pop(0))
     return result
+
+
+async def quiz_evidence(
+    session: AsyncSession,
+    workspace: int,
+    snapshot: ScopeSnapshot,
+    profile: str,
+    topic_vector: list[float] | None,
+    topic: str,
+    *,
+    limit: int = 12,
+) -> list[Evidence]:
+    """Topic Quizzes use hybrid retrieval; whole-scope Quizzes sample every selected document."""
+    if topic_vector is not None:
+        return await retrieve_sources(
+            session, workspace, snapshot, profile, topic_vector, topic, limit=limit
+        )
+    return await quiz_sources(session, workspace, snapshot, profile, limit=limit)

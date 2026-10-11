@@ -24,7 +24,6 @@ from app.jobs.lanes import (
     run_lanes,
 )
 from app.learning.application import LearningProcessor
-from app.learning.infrastructure.langgraph_workflow import LangGraphStudyExecutor
 from app.learning.run_application import AgentRunProcessor
 from app.learning.run_store import SqlAgentRunStore
 from app.learning.store import SqlLearningStore
@@ -81,9 +80,7 @@ async def run_worker() -> None:
     learning = LearningProcessor(
         SqlLearningStore(async_session_factory, RagSettings().profile), models, models
     )
-    runs = AgentRunProcessor(
-        SqlAgentRunStore(learning.store), models, models, LangGraphStudyExecutor()
-    )
+    runs = AgentRunProcessor(SqlAgentRunStore(learning.store), models, models)
     available = {
         # Short, user-facing model work: a person is waiting on each of these.
         INTERACTIVE: Lane(

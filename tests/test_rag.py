@@ -352,7 +352,7 @@ def test_dashscope_batch_vectors_follow_input_order() -> None:
     asyncio.run(check())
 
 
-def test_planner_uses_bounded_json_decisions_without_exposing_other_tools() -> None:
+def test_task_planner_uses_bounded_json_decisions() -> None:
     requests: list[dict] = []
 
     def handle(request: httpx.Request) -> httpx.Response:
@@ -365,7 +365,7 @@ def test_planner_uses_bounded_json_decisions_without_exposing_other_tools() -> N
                 "choices": [
                     {
                         "finish_reason": "stop",
-                        "message": {"content": '{"tool":"search","query":"median"}'},
+                        "message": {"content": '{"action":"answer"}'},
                     }
                 ],
                 "usage": {"prompt_tokens": 40, "completion_tokens": 9},
@@ -375,17 +375,16 @@ def test_planner_uses_bounded_json_decisions_without_exposing_other_tools() -> N
     async def check() -> None:
         async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
             provider = CloudModels(ModelSettings(deepseek_api_key=SecretStr("test-only")), client)
-            decision, usage = await provider.plan_step(
-                "What does the material say?", history=[], observations=[]
+            decision, usage = await provider.plan_task(
+                "What does the material say?", history=[], review_available=False
             )
-            assert decision == {"tool": "search", "query": "median"}
+            assert decision == {"action": "answer"}
             assert usage["prompt_tokens"] == 40
             assert usage["completion_tokens"] == 9
 
     asyncio.run(check())
-    assert requests[0]["max_tokens"] == 256
+    assert requests[0]["max_tokens"] == 800
     assert requests[0]["response_format"] == {"type": "json_object"}
-    assert "delete" not in requests[0]["messages"][0]["content"]
 
 
 def test_standard_quiz_still_accepts_payload_when_provider_omits_usage() -> None:
@@ -401,8 +400,8 @@ def test_standard_quiz_still_accepts_payload_when_provider_omits_usage() -> None
     async def check() -> None:
         async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
             provider = CloudModels(ModelSettings(deepseek_api_key=SecretStr("test-only")), client)
-            assert await provider.generate_quiz({}, []) == {"questions": []}
-            _, usage = await provider.generate_quiz_with_usage({}, [])
+            payload, usage = await provider.generate_quiz_with_usage({}, [])
+            assert payload == {"questions": []}
             assert usage["prompt_tokens"] == 0
 
     asyncio.run(check())

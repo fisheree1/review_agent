@@ -44,12 +44,7 @@ def prepare_quiz(store: AsyncMock, model: AsyncMock) -> None:
         document_id=uuid4(),
         version_id=1,
     )
-    store.message_sources.return_value = [source]
-    model.plan_quiz_step.side_effect = [
-        ({"tool": "search", "query": "median"}, USAGE),
-        ({"tool": "read_source", "source_id": str(source.id)}, USAGE),
-        ({"tool": "generate_quiz"}, USAGE),
-    ]
+    store.message_quiz_sources.return_value = [source]
     model.generate_quiz_with_usage.return_value = (
         {
             "questions": [
@@ -79,7 +74,8 @@ def test_chat_quiz_is_validated_before_atomic_message_publication() -> None:
     args = store.finish_message_quiz.call_args.args
     assert args[3]["type_counts"] == CONFIG["type_counts"]
     assert args[4][0]["sources"][0]["version_id"] == 1
-    assert args[5]["model_calls"] == 5
+    # One routing call plus one generation; evidence is chosen without model tool calls.
+    assert args[5]["model_calls"] == 2
     assert args[5]["task_action"] == "create_quiz"
     store.finish_message.assert_not_awaited()
 
@@ -159,3 +155,18 @@ def test_task_plans_cannot_expand_tools_scope_or_question_limits(payload: dict[s
     with pytest.raises(RagFailure) as caught:
         validate_task_plan(payload)
     assert caught.value.code == "TASK_PLAN_INVALID"
+
+
+def test_study_plan_cannot_add_weak_practice_without_review_or_alter_single_task_steps() -> None:
+    with pytest.raises(RagFailure):
+        validate_task_plan(
+            {
+                "action": "study",
+                "title": "Study",
+                "config": CONFIG,
+                "summary_request": "Summarize median",
+                "practice_after_review": True,
+            }
+        )
+    with pytest.raises(RagFailure):
+        validate_task_plan({"action": "answer", "review_after_submit": True})

@@ -1,6 +1,6 @@
 # 学习 Agent 工作流开发设计
 
-日期：2026-09-29。状态：组合学习主流程已实现；图工作流新增可组合步骤、同范围会话提示和知识点 PDF 下载。是否启用仍由 `AGENT_GRAPH_ENABLED` 控制；真实资料语义质量及成本仍需验收。本文件细化 [框架接入规划](./langgraph-integration-plan.md)，作为后续功能设计、开发拆分与验收依据。
+日期：2026-09-29。状态：组合学习主流程已实现；2026-10-11 起证据由应用确定性选取，LangGraph 已移除（[ADR-0003](./adr/0003-deterministic-evidence.md)），下文涉及图节点与工具循环的段落为历史设计；图工作流新增可组合步骤、同范围会话提示和知识点 PDF 下载。是否启用仍由 `AGENT_GRAPH_ENABLED` 控制；真实资料语义质量及成本仍需验收。本文件细化 [框架接入规划](./langgraph-integration-plan.md)，作为后续功能设计、开发拆分与验收依据。
 
 ## 1. 用户目标与开发范围
 
@@ -23,7 +23,7 @@
 
 ## 2. 设计决策
 
-1. **LangGraph 负责执行编排。** 应用代码持有权限、预算、业务状态、来源校验与结果发布；领域和应用端口不依赖图 SDK。
+1. **应用代码负责执行编排（原为 LangGraph，见 ADR-0003）。** 应用代码持有权限、预算、业务状态、来源校验与结果发布；领域和应用端口不依赖图 SDK。
 2. **按需接入 LangChain。** M1 使用现有模型适配器，M2 单独评估模型/消息组件，降低同时改变编排和供应商协议的风险。
 3. **PostgreSQL 保存事实。** 消息、Quiz、作答和评分是业务事实；检查点记录执行位置及有限中间状态。Redis 沿用限流用途，不增加第二套任务事实源。
 4. **用户请求授权明确的学习步骤。** 普通问答和出题不反复确认；缺少关键参数时才澄清。模型无法授权删除、分享或覆盖记录。
@@ -276,21 +276,21 @@ Quiz 发布、运行成果关联与等待关联应在同一业务事务中形成
 
 ### 持久化决策
 
-遵循 [ADR-0002](./adr/0002-agent-business-checkpoints.md)：未启用框架原生 `AsyncPostgresSaver`、`interrupt()` 或 LangSmith 托管追踪；等待与恢复由 PostgreSQL 业务运行记录负责。证据图在阶段内执行，重启重放已经返回的调用回执；未知调用结果进入 `blocked`，禁止自动再次付费。评分和运行恢复在同一事务完成，不增加独立 Outbox 队列。LangChain 模型组件留作供应商变化时评估，当前沿用已有 HTTPX 适配器。
+遵循 [ADR-0002](./adr/0002-agent-business-checkpoints.md)：未启用框架原生 `AsyncPostgresSaver`、`interrupt()` 或 LangSmith 托管追踪；等待与恢复由 PostgreSQL 业务运行记录负责。证据在阶段内由应用确定性选取，重启重放已经返回的调用回执；未知调用结果进入 `blocked`，禁止自动再次付费。评分和运行恢复在同一事务完成，不增加独立 Outbox 队列。LangChain 模型组件留作供应商变化时评估，当前沿用已有 HTTPX 适配器。
 
 阶段发布与运行位置更新同事务提交，替代原设计第 8.2 节的独立检查点补写。调用回执为私有短期 JSONB，阶段发布即清空，取消/已知失败/到期删除或清空；删除源资料版本级联删除关联运行及回执。未知结果保留稳定状态供检查，不向浏览器暴露回执。
 
 ### 生效上限
 
-单个证据阶段最多 5 次决策、2 次搜索、3 次读取、7 次模型调用、18,000 Token 和 30,000 相对费用单位。整个运行累计最多 22 次模型调用、8 次查询 Embedding、54,000 Token、90,000 相对费用单位及 770 秒预留执行时间；每次领取预留 110 秒，恢复不重置。实际执行秒数单独记录。每阶段最多 12 个调用回执。全运行期限默认 7 天（`AGENT_WAIT_DAYS`，1–30），到期由 Worker 关闭。费用单位不是人民币或供应商报价。
+单个证据阶段一次检索、最多 7 次模型调用（通常 1 次生成，v5 最多修复 1 次）、18,000 Token 和 30,000 相对费用单位。整个运行累计最多 22 次模型调用、8 次查询 Embedding、54,000 Token、90,000 相对费用单位及 770 秒预留执行时间；每次领取预留 110 秒，恢复不重置。实际执行秒数单独记录。每阶段最多 12 个调用回执。全运行期限默认 7 天（`AGENT_WAIT_DAYS`，1–30），到期由 Worker 关闭。费用单位不是人民币或供应商报价。
 
 ### 验证入口
 
-- 单元与隔离质量：`tests/test_langgraph_workflow.py`、`tests/test_agent_evaluation.py`。
+- 单元与隔离质量：`tests/test_quiz_generation.py`、`tests/test_graph_run_processor.py`、`tests/test_agent_evaluation.py`。
 - 真实 PostgreSQL/API：`python -m scripts.verify_agent_workflow`，验证完整闭环、隐藏答案、范围隔离、修订冲突、澄清幂等、重启、调用重放/未知结果、取消、预算、到期与删除。
 - 旧库：先迁移到 `0013`，`python -m scripts.verify_agent_workflow_migration --seed`，升级 head 后执行同脚本不带 `--seed`；验证旧作答保留且 revision=0。仅在独立测试数据库执行。
 - 浏览器：`web/e2e/agent-workflow.spec.ts`；组件 `AgentRunCard.test.tsx`、`QuizDraft.test.tsx`。
-- 真实模型：`python -m scripts.evaluate_agent --live --engine langgraph --output <私有路径>`；默认 20 个合成案例，`--case-limit` 可缩小。只输出来源召回、引用覆盖、拒答、注入标记、Token 与时延指标。小样本通过不代表所有真实资料达到质量门槛。
+- 真实模型：`python -m scripts.evaluate_agent --live --output <私有路径>`；默认 20 个合成案例，`--case-limit` 可缩小。只输出来源召回、引用覆盖、拒答、注入标记、Token 与时延指标。小样本通过不代表所有真实资料达到质量门槛。
 
 原规划的长期复习计划、研究场景、SSE、标准 saver 接入、精确货币费用/P95 验收仍属于后续能力，不应描述为本次已完成。
 

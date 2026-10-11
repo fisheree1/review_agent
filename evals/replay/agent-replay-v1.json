@@ -1,0 +1,319 @@
+{
+  "version": "agent-replay-v1",
+  "cases": [
+    {
+      "id": "focused-cited-answer",
+      "kind": "focused",
+      "question": "Why is the median robust to outliers?",
+      "sources": [
+        {
+          "key": "median",
+          "text": "The median is the middle value after sorting observations. It resists extreme outliers. For 1, 2, 100 the median is 2.",
+          "page": 2
+        },
+        {
+          "key": "mean",
+          "text": "The arithmetic mean adds all observations and divides by their count. A single extreme value can move the mean substantially.",
+          "page": 3
+        }
+      ],
+      "calls": [
+        {
+          "kind": "answer_study",
+          "usage": {
+            "model": "synthetic",
+            "prompt_tokens": 120,
+            "completion_tokens": 60
+          },
+          "payload": {
+            "insufficient_evidence": false,
+            "claims": [
+              {
+                "title": "Median and outliers",
+                "text": "The median resists extreme outliers.",
+                "explanation": "It depends on the middle position after sorting, not on how large the extreme values are.",
+                "citations": [
+                  {
+                    "source_id": "__median__",
+                    "quote": "It resists extreme outliers."
+                  }
+                ]
+              }
+            ],
+            "explanation": "Sorting puts extremes at the ends, so they do not change the middle value."
+          }
+        }
+      ],
+      "expect": {
+        "outcome": "published",
+        "calls": [
+          "answer_study"
+        ],
+        "cited_sources": [
+          "median"
+        ],
+        "repair_calls": 0
+      }
+    },
+    {
+      "id": "focused-repairs-paraphrased-quote-once",
+      "kind": "focused",
+      "question": "How does one outlier affect the mean?",
+      "sources": [
+        {
+          "key": "mean",
+          "text": "The arithmetic mean adds all observations and divides by their count. A single extreme value can move the mean substantially.",
+          "page": 3
+        }
+      ],
+      "calls": [
+        {
+          "kind": "answer_study",
+          "usage": {
+            "model": "synthetic",
+            "prompt_tokens": 120,
+            "completion_tokens": 60
+          },
+          "payload": {
+            "insufficient_evidence": false,
+            "claims": [
+              {
+                "title": "Mean sensitivity",
+                "text": "One extreme value shifts the mean.",
+                "explanation": "The mean uses every value.",
+                "citations": [
+                  {
+                    "source_id": "__mean__",
+                    "quote": "An extreme value changes the mean a lot."
+                  }
+                ]
+              }
+            ],
+            "explanation": "Every observation contributes to the mean."
+          }
+        },
+        {
+          "kind": "answer_study",
+          "usage": {
+            "model": "synthetic",
+            "prompt_tokens": 120,
+            "completion_tokens": 60
+          },
+          "payload": {
+            "insufficient_evidence": false,
+            "claims": [
+              {
+                "title": "Mean sensitivity",
+                "text": "One extreme value shifts the mean.",
+                "explanation": "The mean uses every value, so an extreme one pulls it.",
+                "citations": [
+                  {
+                    "source_id": "__mean__",
+                    "quote": "A single extreme value can move the mean substantially."
+                  }
+                ]
+              }
+            ],
+            "explanation": "Every observation contributes to the mean."
+          }
+        }
+      ],
+      "expect": {
+        "outcome": "published",
+        "calls": [
+          "answer_study",
+          "answer_study"
+        ],
+        "cited_sources": [
+          "mean"
+        ],
+        "repair_calls": 1
+      }
+    },
+    {
+      "id": "focused-no-evidence-skips-generation",
+      "kind": "focused",
+      "question": "When is the exam?",
+      "sources": [],
+      "calls": [],
+      "expect": {
+        "outcome": "insufficient_evidence",
+        "calls": []
+      }
+    },
+    {
+      "id": "overview-batch-keeps-only-cited-points",
+      "kind": "overview",
+      "question": "Summarize the key statistics in this batch.",
+      "sources": [
+        {
+          "key": "median",
+          "text": "The median is the middle value after sorting observations. It resists extreme outliers. For 1, 2, 100 the median is 2.",
+          "page": 2
+        },
+        {
+          "key": "variation",
+          "text": "Variance measures the average squared distance of observations from the mean; the standard deviation is its square root.",
+          "page": 5
+        }
+      ],
+      "calls": [
+        {
+          "kind": "answer_study",
+          "usage": {
+            "model": "synthetic",
+            "prompt_tokens": 120,
+            "completion_tokens": 60
+          },
+          "payload": {
+            "insufficient_evidence": false,
+            "claims": [
+              {
+                "title": "Median",
+                "text": "The median is the middle value after sorting.",
+                "explanation": "Sort, then take the middle.",
+                "citations": [
+                  {
+                    "source_id": "__median__",
+                    "quote": "The median is the middle value after sorting observations."
+                  }
+                ]
+              },
+              {
+                "title": "Standard deviation",
+                "text": "The standard deviation is the square root of variance.",
+                "explanation": "It returns spread to the original units.",
+                "citations": [
+                  {
+                    "source_id": "__variation__",
+                    "quote": "the standard deviation is its square root"
+                  }
+                ]
+              }
+            ],
+            "explanation": "Centre and spread describe a distribution."
+          }
+        }
+      ],
+      "expect": {
+        "outcome": "published",
+        "calls": [
+          "answer_study"
+        ],
+        "cited_sources": [
+          "median",
+          "variation"
+        ],
+        "repair_calls": 0
+      }
+    },
+    {
+      "id": "topic-quiz-drops-unsupported-question",
+      "kind": "quiz",
+      "config": {
+        "type_counts": {
+          "single": 2,
+          "multiple": 0,
+          "true_false": 0,
+          "short": 0
+        },
+        "difficulty": "medium",
+        "language": "en",
+        "topic": "outliers",
+        "generation_mode": "agent"
+      },
+      "sources": [
+        {
+          "key": "median",
+          "text": "The median is the middle value after sorting observations. It resists extreme outliers. For 1, 2, 100 the median is 2.",
+          "page": 2
+        },
+        {
+          "key": "mean",
+          "text": "The arithmetic mean adds all observations and divides by their count. A single extreme value can move the mean substantially.",
+          "page": 3
+        }
+      ],
+      "calls": [
+        {
+          "kind": "generate_quiz",
+          "usage": {
+            "model": "synthetic",
+            "prompt_tokens": 120,
+            "completion_tokens": 60
+          },
+          "payload": {
+            "questions": [
+              {
+                "kind": "single",
+                "topic": "outliers",
+                "stem": "Which statistic resists extreme outliers?",
+                "options": [
+                  "Median",
+                  "Mean"
+                ],
+                "answer": "Median",
+                "explanation": "The median depends on the middle position.",
+                "citations": [
+                  {
+                    "source_id": "__median__",
+                    "quote": "It resists extreme outliers."
+                  }
+                ]
+              },
+              {
+                "kind": "single",
+                "topic": "outliers",
+                "stem": "Which statistic was invented in 1900?",
+                "options": [
+                  "Median",
+                  "Mean"
+                ],
+                "answer": "Mean",
+                "explanation": "Unsupported.",
+                "citations": [
+                  {
+                    "source_id": "__mean__",
+                    "quote": "invented in 1900"
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "expect": {
+        "outcome": "published",
+        "calls": [
+          "generate_quiz"
+        ],
+        "cited_sources": [
+          "median"
+        ],
+        "accepted_questions": 1
+      }
+    },
+    {
+      "id": "whole-scope-quiz-without-evidence-skips-generation",
+      "kind": "quiz",
+      "config": {
+        "type_counts": {
+          "single": 1,
+          "multiple": 0,
+          "true_false": 0,
+          "short": 0
+        },
+        "difficulty": "easy",
+        "language": "en",
+        "topic": ""
+      },
+      "sources": [],
+      "calls": [],
+      "expect": {
+        "outcome": "failed",
+        "failure_code": "QUIZ_NO_EVIDENCE",
+        "calls": []
+      }
+    }
+  ]
+}

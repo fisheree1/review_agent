@@ -2,7 +2,7 @@
 
 from typing import Any
 
-from app.learning.agent import AgentBudget, RunCheck, SourceSearch, StudyPlanningModel
+from app.learning.agent import AgentBudget, RunCheck, SourceSearch, StudyGenerationModel
 from app.learning.study_generation import ValidationRecorder, generate_study
 from app.rag.domain import STUDY_PROMPT_VERSION, validate_study_answer, validate_vectors
 from app.rag.ports import Embeddings
@@ -13,11 +13,12 @@ async def answer_focused(
     history: list[dict[str, str]],
     *,
     embeddings: Embeddings,
-    model: StudyPlanningModel,
+    model: StudyGenerationModel,
     search: SourceSearch,
     ensure_active: RunCheck,
     reliable: bool = False,
     record_validation: ValidationRecorder | None = None,
+    budget: AgentBudget | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     # Preserve the last same-scope subject when a plan leaves a follow-up implicit.
     query = " ".join([history[-1]["question"], question])[:3000] if history else question
@@ -26,7 +27,7 @@ async def answer_focused(
     validate_vectors(vectors, 1)
     await ensure_active()
     sources = (await search(vectors[0], query))[:8]
-    budget = AgentBudget()
+    budget = budget if budget is not None else AgentBudget()
     usage: dict[str, Any] = {}
     if sources and reliable:
         result, usage = await generate_study(

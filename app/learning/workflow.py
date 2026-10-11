@@ -5,12 +5,9 @@ from __future__ import annotations
 from typing import Any, Protocol
 from uuid import UUID
 
-from app.learning.agent import AgentBudget, RunCheck, SourceSearch, StudyPlanningModel
 from app.learning.conversation_tasks import TaskPlan
 from app.learning.graph_tasks import GraphTaskPlan
-from app.learning.quiz_agent import QuizPlanningModel
 from app.rag.domain import Evidence
-from app.rag.ports import Embeddings
 
 LEGACY_GRAPH_VERSION = "study-graph-v1"
 BATCHED_GRAPH_VERSIONS = ("study-graph-v4", "study-graph-v5")
@@ -27,36 +24,14 @@ MAX_RUN_SECONDS = 770
 MAX_OVERVIEW_RUN_SECONDS = 1540
 
 
-class StudyExecutor(Protocol):
-    async def answer(
-        self,
-        question: str,
-        history: list[dict[str, str]],
-        *,
-        embeddings: Embeddings,
-        model: StudyPlanningModel,
-        search: SourceSearch,
-        ensure_active: RunCheck,
-        budget: AgentBudget,
-    ) -> tuple[dict[str, Any], dict[str, Any]]: ...
-
-    async def quiz(
-        self,
-        config: dict[str, Any],
-        *,
-        embeddings: Embeddings,
-        model: QuizPlanningModel,
-        search: SourceSearch,
-        ensure_active: RunCheck,
-        budget: AgentBudget,
-    ) -> tuple[list[dict[str, Any]], dict[str, Any]]: ...
-
-
 class AgentRunPersistence(Protocol):
     async def claim(self) -> dict[str, Any] | None: ...
     async def ensure_active(self, public_id: UUID, fence: UUID) -> None: ...
     async def sources(
         self, public_id: UUID, fence: UUID, vector: list[float], query: str
+    ) -> list[Evidence]: ...
+    async def quiz_sources(
+        self, public_id: UUID, fence: UUID, topic_vector: list[float] | None, topic: str
     ) -> list[Evidence]: ...
     async def overview_sources(
         self, public_id: UUID, fence: UUID
