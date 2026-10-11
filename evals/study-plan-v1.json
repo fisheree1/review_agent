@@ -1,0 +1,65 @@
+{
+  "version": "study-plan-v1",
+  "cases": [
+    {
+      "id": "explain-quiz-review-after-submit",
+      "category": "deferred_review",
+      "request": "Explain how to choose between the mean and the median, then create a 2-question English practice quiz (1 single-choice, 1 short-answer, medium). After I submit, review my mistakes.",
+      "expected_steps": ["summary", "quiz", "review"],
+      "type_counts": {"single": 1, "multiple": 0, "true_false": 0, "short": 1},
+      "language": "en"
+    },
+    {
+      "id": "explain-quiz-review-practice",
+      "category": "deferred_practice",
+      "request": "Summarize mean and median, then create one single-choice and one short-answer question in English, medium difficulty. After I submit, review mistakes and give weak-topic practice.",
+      "expected_steps": ["summary", "quiz", "review", "practice"],
+      "type_counts": {"single": 1, "multiple": 0, "true_false": 0, "short": 1},
+      "language": "en"
+    },
+    {
+      "id": "quiz-then-check-answers",
+      "category": "deferred_review",
+      "request": "Quiz me with 3 single-choice questions on standard deviation, then check my answers once I've answered them.",
+      "expected_steps": ["quiz", "review"],
+      "type_counts": {"single": 3, "multiple": 0, "true_false": 0, "short": 0}
+    },
+    {
+      "id": "zh-explain-quiz-review",
+      "category": "deferred_review",
+      "request": "先讲解均值和中位数怎么选，再出3道中等难度单选题，我提交后帮我复盘错题。",
+      "expected_steps": ["summary", "quiz", "review"],
+      "type_counts": {"single": 3, "multiple": 0, "true_false": 0, "short": 0},
+      "language": "zh"
+    },
+    {
+      "id": "zh-quiz-review-practice",
+      "category": "deferred_practice",
+      "request": "出2道简答题，交卷后讲评我的错题，再针对薄弱点出题练习。",
+      "expected_steps": ["quiz", "review", "practice"],
+      "type_counts": {"single": 0, "multiple": 0, "true_false": 0, "short": 2},
+      "language": "zh"
+    },
+    {
+      "id": "quiz-only",
+      "category": "no_review_requested",
+      "request": "Create a 3-question single-choice quiz on the median.",
+      "expected_steps": ["quiz"],
+      "type_counts": {"single": 3, "multiple": 0, "true_false": 0, "short": 0}
+    },
+    {
+      "id": "explain-and-quiz-only",
+      "category": "no_review_requested",
+      "request": "Explain variance, then give me 2 true/false questions about it.",
+      "expected_steps": ["summary", "quiz"],
+      "type_counts": {"single": 0, "multiple": 0, "true_false": 2, "short": 0}
+    },
+    {
+      "id": "review-existing-submission",
+      "category": "immediate_review",
+      "request": "Review the mistakes in my last submitted practice.",
+      "review_available": true,
+      "expected_steps": ["review"]
+    }
+  ]
+}
