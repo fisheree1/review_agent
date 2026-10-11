@@ -4,12 +4,14 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, expect, test, vi } from "vitest";
 
+import { ApiError } from "../api/documents";
 import * as learning from "../api/learning";
 import { StudyPage } from "./StudyPage";
 
 vi.mock("../api/learning", async (original) => ({
   ...(await original<typeof learning>()), listCollections: vi.fn(), listConversations: vi.fn(),
   listConversationGroups: vi.fn(), getConversation: vi.fn(), getAgentRun: vi.fn(), askConversation: vi.fn(), cancelConversationMessage: vi.fn(),
+  setConversationScope: vi.fn(),
 }));
 vi.mock("../hooks/useDocuments", () => ({ useDocuments: () => ({ documents: [], nextCursor: null }) }));
 vi.mock("../components/AppHeader", () => ({ AppHeader: () => <header>Review Agent</header> }));
@@ -125,4 +127,15 @@ test("historical points and their full explanation retain usable original source
   expect(screen.queryByRole("link", { name: /第 3 页/ })).not.toBeInTheDocument();
   await userEvent.click(screen.getByRole("button", { name: "详细讲解 查看原文" }));
   expect(screen.getByLabelText("原文预览")).toHaveTextContent("PDF 第 3 页");
+});
+
+test("an unindexed scope sends the user to the reader to consent instead of retrying the save", async () => {
+  const user = userEvent.setup();
+  vi.mocked(learning.setConversationScope).mockRejectedValue(new ApiError("所选资料尚未完成问答索引", "INDEX_NOT_READY", 409));
+  show();
+  await user.click(await screen.findByText("资料 · 1"));
+  await user.click(screen.getByRole("button", { name: "保存范围" }));
+  expect(await screen.findByText(/请在阅读页点击“准备资料问答”/)).toBeVisible();
+  expect(screen.getByRole("link", { name: "打开“stats.pdf”准备问答" })).toHaveAttribute("href", "/documents/document");
+  expect(screen.queryByText(/可重试保存/)).not.toBeInTheDocument();
 });

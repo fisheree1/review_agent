@@ -99,6 +99,8 @@ test("pushed progress updates the run without waiting for polling and closes whe
   try {
     show({ ...fixture, status: "running", stage: "summary", outputs: [] });
     expect(await screen.findByText("正在总结资料")).toBeVisible();
+    // The stream opens once the first fetch shows the run is still live.
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
     const source = FakeEventSource.instances[0];
     expect(source.url).toContain("/api/v1/agent-runs/run/events");
     expect(source.init?.withCredentials).toBe(true);
@@ -108,6 +110,18 @@ test("pushed progress updates the run without waiting for polling and closes whe
     expect(learning.getAgentRun).toHaveBeenCalledTimes(1);
     source.emit("run", { ...fixture, status: "completed", stage: "done", revision: 5 });
     await waitFor(() => expect(source.closed).toBe(true));
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});
+
+test("a finished run renders from one fetch without opening a progress stream", async () => {
+  FakeEventSource.instances = [];
+  vi.stubGlobal("EventSource", FakeEventSource);
+  try {
+    show({ ...fixture, status: "completed", stage: "done" });
+    expect(await screen.findByText("作答记录 bound-attempt")).toBeVisible();
+    expect(FakeEventSource.instances).toHaveLength(0);
   } finally {
     vi.unstubAllGlobals();
   }

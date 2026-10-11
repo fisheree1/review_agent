@@ -2,7 +2,7 @@ import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useSta
 import { useInfiniteQuery, useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "react-router-dom";
 
-import type { DocumentSummary } from "../api/documents";
+import { ApiError, type DocumentSummary } from "../api/documents";
 import {
   askConversation, cancelConversationMessage, createCollection, createConversation,
   deleteCollection, getAgentRun, getConversation, listCollections, listConversations,
@@ -179,6 +179,14 @@ export function StudyPage() {
     onSuccess: (created) => { createKey.current = null; refreshConversations(); navigate(`/study/${created.id}`); },
   });
   const openCreate = () => { if (!createConversationMutation.isPending) createConversationMutation.mutate(); };
+  // Indexing needs explicit consent in the reader, so an unindexed scope links there instead of retrying.
+  const scopeDocuments = useMemo(() => {
+    const ids = new Set([...activeScope.document_ids, ...(collections.data ?? [])
+      .filter((collection) => activeScope.collection_ids.includes(collection.id)).flatMap((collection) => collection.document_ids)]);
+    const names = new Map([...(detail.data?.scope ?? []).map((item) => [item.document_id, item.filename] as const),
+      ...documents.map((document) => [document.id, document.filename] as const)]);
+    return Array.from(ids, (id) => ({ id, filename: names.get(id) ?? "资料" }));
+  }, [activeScope, collections.data, detail.data?.scope, documents]);
   const switchScope = useMutation({
     mutationFn: () => setConversationScope(conversationId!, activeScope),
     onSuccess: () => { setScopeOpen(false); refreshConversations(); },
@@ -272,7 +280,10 @@ export function StudyPage() {
                       <div className="agent-scope__panel">
                         <ScopePicker collections={collections.data ?? []} documents={documents} hasMore={Boolean(nextCursor)} label="资料范围" loading={documentsLoading} onChange={setActiveScope} selectedLabels={detail.data.scope.map((item) => ({ id: item.document_id, filename: item.filename }))} value={activeScope} />
                         {nextCursor ? <button className="button button--secondary" onClick={() => void loadMore()} type="button">加载更多资料</button> : null}
-                        {switchScope.error ? <p role="alert">{switchScope.error.message}，可重试保存。</p> : null}
+                        {switchScope.error instanceof ApiError && switchScope.error.code === "INDEX_NOT_READY" ? <div role="alert">
+                          <p>所选资料还没有准备好问答。请在阅读页点击“准备资料问答”，确认后资料正文才会发送至服务商建立索引；完成后再保存范围。</p>
+                          <ul>{scopeDocuments.map((document) => <li key={document.id}><Link to={`/documents/${document.id}`}>打开“{document.filename}”准备问答</Link></li>)}</ul>
+                        </div> : switchScope.error ? <p role="alert">{switchScope.error.message}，可重试保存。</p> : null}
                         <button className="button button--secondary" disabled={switchScope.isPending} onClick={() => switchScope.mutate()} type="button">保存范围</button>
                       </div>
                     </details>

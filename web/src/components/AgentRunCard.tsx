@@ -20,7 +20,8 @@ export function AgentRunCard({ runId, conversationId }: { runId: string; convers
   const cache = useQueryClient();
   const [answer, setAnswer] = useState("");
   const responseKey = useRef<{ answer: string; key: string } | null>(null);
-  const [streamable, setStreamable] = useState(true);
+  // Open the stream only once the run is known to be live; finished runs need no stream.
+  const [streamable, setStreamable] = useState(false);
   const live = useRunEvents(runId, streamable);
   const run = useQuery({
     queryKey: ["agent-run", runId], queryFn: () => getAgentRun(runId),
@@ -33,7 +34,8 @@ export function AgentRunCard({ runId, conversationId }: { runId: string; convers
     },
   });
   const closed = run.data ? terminal.has(run.data.status) || run.data.status === "blocked" : false;
-  useEffect(() => setStreamable(!closed), [closed]);
+  const loaded = run.data !== undefined;
+  useEffect(() => setStreamable(loaded && !closed), [loaded, closed]);
   useEffect(() => {
     if (run.data) void cache.invalidateQueries({ queryKey: ["conversation", conversationId] });
   }, [cache, conversationId, run.data?.revision]);
