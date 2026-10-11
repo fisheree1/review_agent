@@ -287,3 +287,6 @@ Web 从已校验 claims 构建知识点阅读区；右侧 PDF 面板显示该点
 
 对话消息只经由 `AgentRunProcessor` 处理：`ask` 总是创建 `agent_runs` 行，`AGENT_GRAPH_ENABLED` 开关与直接处理消息的 `LearningProcessor.process_message` 已删除，迁移 `0019` 把遗留的排队消息交给运行。阅读页单资料问答仍保留 `rag_questions` 表与原有 API，但 `RagProcessor` 不再自带检索后生成的流程：Worker 组装时注入 `reader_answerer`，与对话共用 `answer_focused` 的一次检索、一次生成和逐点校验，回答增加可选的 `title`/`explanation` 字段（向后兼容）。`rag` 模块只定义 `QuestionAnswerer` 端口，不依赖 `learning`。独立出题已在第 1 阶段与对话共用 `generate_scoped_quiz`。
 
+## 20. 运行进度推送、周期清理与存储拆分（ADR-0006）
+
+`agent_runs` 行触发器在状态、阶段、修订号或输出变化时 `pg_notify` 运行 UUID（迁移 `0020`），提交后送达。API 进程内的 `RunEventHub` 用一条专用监听连接分发通知；`GET /api/v1/agent-runs/{id}/events` 先授权并订阅，再发快照，每次通知都经授权存储重新读取，心跳 15 秒，最长 10 分钟。前端 `useRunEvents` 写入查询缓存，连接期间轮询降为 30 秒，断开后回到原轮询。过期与失效租约回收由 `SqlAgentRunStore.sweep` 每 30 秒执行，不再在每次领取时扫描。学习存储按聚合拆为 `SqlLearningStore`（资料集、对话、消息）、`SqlQuizStore`（`.quizzes`）与 `SqlAttemptStore`（`.attempts`）。

@@ -13,10 +13,10 @@ from app.auth.models import User, WorkspaceMember
 from app.core.errors import ApplicationError
 from app.documents.infrastructure.models import DocumentModel, DocumentVersionModel, WorkspaceModel
 from app.learning.models import Quiz, QuizAnswer, QuizAttempt, QuizDocument, QuizQuestion
+from app.learning.quiz_store import question_view
 from app.learning.review import REVIEW_POLICY_VERSION, ReviewRating, schedule_review
 from app.learning.review_models import ReviewCard, ReviewEvent
 from app.learning.scope import missing
-from app.learning.store import question_view
 
 
 def conflict(code: str, message: str) -> ApplicationError:

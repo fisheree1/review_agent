@@ -15,6 +15,8 @@ from app.rag.models import DocumentChunk, DocumentIndex
 from app.rag.retrieval import evidence_from_row, hybrid_candidates, page_locator
 
 ScopeSnapshot = list[dict[str, Any]]
+# Lease for Quiz generation, grading and run claims; renewed by finishing within it.
+LEASE_SECONDS = 180
 
 
 def missing() -> ApplicationError:

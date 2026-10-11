@@ -167,6 +167,7 @@ async def verify() -> None:
             .where(AgentRun.workspace_id == owner.id, AgentRun.public_id == run)
             .values(lease_until=datetime.now(UTC) - timedelta(seconds=1))
         )
+    assert await runs.sweep()
     await worker.process_next()
     assert model.calls == 1
     progress = await runs.get(owner.public_id, run)

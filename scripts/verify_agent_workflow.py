@@ -13,12 +13,13 @@ from sqlalchemy.exc import IntegrityError
 
 from app.core.auth import Principal, get_current_principal
 from app.core.database import async_session_factory as sessions
-from app.core.database import close_database
+from app.core.database import close_database, engine
 from app.documents.infrastructure.models import DocumentModel, DocumentVersionModel, WorkspaceModel
 from app.learning.api import get_learning_service
 from app.learning.application import LearningProcessor, LearningService
 from app.learning.models import Quiz
 from app.learning.run_application import AgentRunProcessor
+from app.learning.run_events import RunEventHub
 from app.learning.run_models import AgentRun, AgentStageExecution
 from app.learning.run_store import SqlAgentRunStore
 from app.learning.store import SqlLearningStore
@@ -91,7 +92,7 @@ async def verify() -> None:
         assert waiting["status"] == "waiting_input" and waiting["stage"] == "wait"
         output = waiting["outputs"][-1]
         quiz_id, attempt_id = UUID(output["quiz_id"]), UUID(output["attempt_id"])
-        attempt = await store.get_attempt(owner.public_id, quiz_id, attempt_id)
+        attempt = await store.attempts.get_attempt(owner.public_id, quiz_id, attempt_id)
         assert all(q["answer"] is None and not q["sources"] for q in attempt["questions"])
         await expect_error(runs.get(foreign.public_id, run_id), "RESOURCE_NOT_FOUND")
         await expect_error(runs.cancel(foreign.public_id, run_id), "RESOURCE_NOT_FOUND")
@@ -102,7 +103,7 @@ async def verify() -> None:
             runs.list_runs(foreign.public_id, conversation_id, 0, 10), "RESOURCE_NOT_FOUND"
         )
         await expect_error(
-            store.get_attempt(foreign.public_id, quiz_id, attempt_id), "RESOURCE_NOT_FOUND"
+            store.attempts.get_attempt(foreign.public_id, quiz_id, attempt_id), "RESOURCE_NOT_FOUND"
         )
         # New scope only affects new questions. Waiting does not occupy execution resources.
         await store.set_conversation_scope(owner.public_id, conversation_id, [second], [])
@@ -113,7 +114,7 @@ async def verify() -> None:
         assert len((await runs.get(owner.public_id, run_id))["scope"]) == 2
         revision = attempt["revision"]
         for q in attempt["questions"]:
-            result = await store.save_answer(
+            result = await store.attempts.save_answer(
                 owner.public_id,
                 quiz_id,
                 attempt_id,
@@ -122,7 +123,7 @@ async def verify() -> None:
                 revision,
             )
             revision = result["revision"]
-            replay = await store.save_answer(
+            replay = await store.attempts.save_answer(
                 owner.public_id,
                 quiz_id,
                 attempt_id,
@@ -133,7 +134,7 @@ async def verify() -> None:
             assert replay["revision"] == revision  # Lost acknowledgement never duplicates a write.
 
         await expect_error(
-            store.save_answer(
+            store.attempts.save_answer(
                 owner.public_id,
                 quiz_id,
                 attempt_id,
@@ -143,15 +144,15 @@ async def verify() -> None:
             ),
             "ANSWER_REVISION_CONFLICT",
         )
-        await store.submit_attempt(owner.public_id, quiz_id, attempt_id)
-        await store.submit_attempt(owner.public_id, quiz_id, attempt_id)
+        await store.attempts.submit_attempt(owner.public_id, quiz_id, attempt_id)
+        await store.attempts.submit_attempt(owner.public_id, quiz_id, attempt_id)
         # A fresh processor simulates service restart; no in-memory state is required.
         worker = AgentRunProcessor(SqlAgentRunStore(store), Models(), Models())
         await advance(3)  # grading, review, one weak-topic Quiz
         completed = await runs.get(owner.public_id, run_id)
         assert completed["status"] == "completed" and len(completed["outputs"]) == 4
         assert completed["outputs"][2]["attempt_id"] == str(attempt_id)
-        assert (await store.get_attempt(owner.public_id, quiz_id, attempt_id))[
+        assert (await store.attempts.get_attempt(owner.public_id, quiz_id, attempt_id))[
             "status"
         ] == "submitted"
         assert not await worker.process_next()
@@ -246,6 +247,8 @@ async def verify() -> None:
                 .where(AgentRun.public_id == recovering)
                 .values(lease_until=datetime.now(UTC) - timedelta(seconds=1))
             )
+        # Lapsed leases are recovered by the periodic sweep, not by each claim.
+        assert await runs.sweep()
         await advance(2)
         assert (await runs.get(owner.public_id, recovering))["status"] == "completed"
         print("PASS: returned request receipt replays after lease expiry")
@@ -260,6 +263,7 @@ async def verify() -> None:
                 .where(AgentRun.public_id == unknown)
                 .values(lease_until=datetime.now(UTC) - timedelta(seconds=1))
             )
+        assert await runs.sweep()
         assert not await worker.process_next()
         assert (await runs.get(owner.public_id, unknown))["failure_code"] == "RUN_RESULT_UNKNOWN"
         await runs.cancel(owner.public_id, unknown)
@@ -306,19 +310,19 @@ async def verify() -> None:
         published = (await runs.get(owner.public_id, cancelled_study))["outputs"][-1]
         saved_quiz, saved_attempt = UUID(published["quiz_id"]), UUID(published["attempt_id"])
         await runs.cancel(owner.public_id, cancelled_study)
-        original = await store.get_attempt(owner.public_id, saved_quiz, saved_attempt)
+        original = await store.attempts.get_attempt(owner.public_id, saved_quiz, saved_attempt)
         for question in original["questions"]:
-            await store.save_answer(
+            await store.attempts.save_answer(
                 owner.public_id,
                 saved_quiz,
                 saved_attempt,
                 UUID(question["id"]),
                 "Median" if question["kind"] == "single" else "Manual study answer",
             )
-        await store.submit_attempt(owner.public_id, saved_quiz, saved_attempt)
+        await store.attempts.submit_attempt(owner.public_id, saved_quiz, saved_attempt)
         manual = LearningProcessor(store, Models(), Models())
         assert await manual.process_grading()
-        assert (await store.get_attempt(owner.public_id, saved_quiz, saved_attempt))[
+        assert (await store.attempts.get_attempt(owner.public_id, saved_quiz, saved_attempt))[
             "status"
         ] == "submitted"
         assert (await runs.get(owner.public_id, cancelled_study))["status"] == "cancelled"
@@ -340,8 +344,31 @@ async def verify() -> None:
             "PASS: received invalid response fails clearly without retry or unknown billing state"
         )
 
+        # Committed run changes reach progress streams through PostgreSQL notifications.
+        hub = RunEventHub(
+            engine.url.set(drivername="postgresql").render_as_string(hide_password=False)
+        )
+        try:
+            watched = await request("What resists outliers?")
+            other = await service.create_conversation(owner.public_id, "Other", [first], [])
+            unrelated = UUID(
+                (
+                    await service.ask(
+                        owner.public_id, UUID(other["id"]), str(uuid4()), "Unrelated question"
+                    )
+                )["run_id"]
+            )
+            async with hub.subscribe(watched) as changes, hub.subscribe(unrelated) as quiet:
+                await runs.cancel(owner.public_id, watched)
+                assert await asyncio.wait_for(changes.get(), timeout=5) is True
+                await asyncio.sleep(0.2)
+                assert quiet.empty()
+        finally:
+            await hub.close()
+        print("PASS: run changes notify only that run's progress stream")
+
         # Database constraints prevent a foreign Quiz being attached even outside API code.
-        foreign_quiz = await SqlLearningStore(sessions, PROFILE).create_quiz(
+        foreign_quiz = await SqlLearningStore(sessions, PROFILE).quizzes.create_quiz(
             foreign.public_id,
             "foreign-quiz",
             "Foreign",

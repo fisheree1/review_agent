@@ -22,6 +22,7 @@ from app.jobs.lanes import (
     NamedStep,
     parse_lane_names,
     run_lanes,
+    throttled,
 )
 from app.learning.application import LearningProcessor
 from app.learning.focused_answer import reader_answerer
@@ -31,6 +32,9 @@ from app.learning.store import SqlLearningStore
 from app.rag.application import RagProcessor
 from app.rag.providers import CloudModels
 from app.rag.store import SqlRagStore
+
+# Expired runs and lapsed leases are found by table scans, so they run on a fixed interval.
+RUN_SWEEP_SECONDS = 30.0
 
 
 async def run_worker() -> None:
@@ -85,7 +89,8 @@ async def run_worker() -> None:
     learning = LearningProcessor(
         SqlLearningStore(async_session_factory, RagSettings().profile), models, models
     )
-    runs = AgentRunProcessor(SqlAgentRunStore(learning.store), models, models)
+    run_store = SqlAgentRunStore(learning.store)
+    runs = AgentRunProcessor(run_store, models, models)
     available = {
         # Short, user-facing model work: a person is waiting on each of these.
         INTERACTIVE: Lane(
@@ -101,6 +106,8 @@ async def run_worker() -> None:
         AGENT: Lane(
             AGENT,
             (
+                # Expiry and lapsed-lease recovery scan the table, so they run periodically.
+                NamedStep("run_sweep", throttled(run_store.sweep, seconds=RUN_SWEEP_SECONDS)),
                 NamedStep("agent_run", runs.process_next),
                 NamedStep("quiz_generation", learning.process_quiz),
             ),

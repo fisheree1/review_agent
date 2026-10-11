@@ -1,19 +1,25 @@
 from __future__ import annotations
 
 import asyncio
+import time
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import AsyncExitStack
 from datetime import datetime
 from typing import Annotated, Any, Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Header, Query, Response
+from fastapi import APIRouter, Depends, Header, Query, Request, Response
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.core.auth import Principal, get_current_principal
 from app.core.config import AgentSettings, RagSettings
 from app.core.database import async_session_factory
+from app.core.errors import ApplicationError
 from app.core.rate_limit import RedisRateLimiter, enforce_rate_limit, get_rate_limiter
 from app.learning.application import LearningService
 from app.learning.pdf_export import render_study_pdf
+from app.learning.run_events import RunEventHub, StreamCapacityExceeded, get_run_event_hub
 from app.learning.run_store import SqlAgentRunStore
 from app.learning.store import SqlLearningStore
 from app.rag.api import AnswerResponse, ClaimResponse
@@ -268,6 +274,94 @@ async def get_run(run_id: UUID, principal: Auth, service: Service) -> RunRespons
     )
 
 
+STREAM_HEARTBEAT_SECONDS = 15.0
+# Clients reconnect after this; it bounds how long one stream holds server resources.
+STREAM_MAX_SECONDS = 600.0
+STREAM_CLOSED_STATUSES = frozenset({"completed", "failed", "cancelled", "expired", "blocked"})
+
+
+def _sse(event: str, data: str) -> str:
+    return f"event: {event}\ndata: {data}\n\n"
+
+
+async def run_event_stream(
+    read_run: Callable[[], Awaitable[dict[str, Any]]],
+    snapshot: dict[str, Any],
+    changes: asyncio.Queue[bool],
+    is_disconnected: Callable[[], Awaitable[bool]],
+    *,
+    heartbeat: float = STREAM_HEARTBEAT_SECONDS,
+    max_seconds: float = STREAM_MAX_SECONDS,
+) -> AsyncIterator[str]:
+    """Send the run, then each committed change, until it closes or the client leaves."""
+    deadline = time.monotonic() + max_seconds
+    view = snapshot
+    yield "retry: 3000\n\n"
+    while True:
+        yield _sse("run", RunResponse.model_validate(view).model_dump_json())
+        if view["status"] in STREAM_CLOSED_STATUSES:
+            return
+        while True:
+            if await is_disconnected() or time.monotonic() >= deadline:
+                return
+            try:
+                alive = await asyncio.wait_for(changes.get(), timeout=heartbeat)
+            except TimeoutError:
+                yield ": keep-alive\n\n"
+                continue
+            break
+        if not alive:
+            return  # Listener lost; the client reconnects or falls back to polling.
+        try:
+            # Re-read through the authorized store: deletion or ownership changes end the stream.
+            view = await read_run()
+        except ApplicationError:
+            return
+
+
+@router.get("/agent-runs/{run_id}/events")
+async def run_events(
+    run_id: UUID,
+    request: Request,
+    principal: Auth,
+    service: Service,
+    hub: Annotated[RunEventHub, Depends(get_run_event_hub)],
+) -> StreamingResponse:
+    runs = SqlAgentRunStore(service.store)
+
+    async def read_run() -> dict[str, Any]:
+        return await runs.get(principal.workspace_public_id, run_id)
+
+    stack = AsyncExitStack()
+    try:
+        # Subscribe before the snapshot so no committed change can fall between them.
+        changes = await stack.enter_async_context(hub.subscribe(run_id))
+        snapshot = await read_run()
+    except StreamCapacityExceeded as exc:
+        await stack.aclose()
+        raise ApplicationError(
+            code="RUN_STREAM_BUSY", message="实时进度暂不可用，已改为定时刷新", status_code=503
+        ) from exc
+    except BaseException:
+        await stack.aclose()
+        raise
+
+    async def body() -> AsyncIterator[str]:
+        try:
+            async for chunk in run_event_stream(
+                read_run, snapshot, changes, request.is_disconnected
+            ):
+                yield chunk
+        finally:
+            await stack.aclose()
+
+    return StreamingResponse(
+        body(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 @router.post("/agent-runs/{run_id}:cancel", response_model=RunResponse)
 async def cancel_run(run_id: UUID, principal: Auth, service: Service) -> RunResponse:
     return RunResponse.model_validate(
@@ -472,7 +566,7 @@ async def feedback(
 async def list_quizzes(principal: Auth, service: Service) -> list[QuizResponse]:
     return [
         QuizResponse.model_validate(item)
-        for item in await service.store.list_quizzes(principal.workspace_public_id)
+        for item in await service.store.quizzes.list_quizzes(principal.workspace_public_id)
     ]
 
 
@@ -505,7 +599,7 @@ async def create_quiz(
 @router.get("/quizzes/{quiz_id}", response_model=QuizDetail)
 async def get_quiz(quiz_id: UUID, principal: Auth, service: Service) -> QuizDetail:
     return QuizDetail.model_validate(
-        await service.store.get_quiz(principal.workspace_public_id, quiz_id)
+        await service.store.quizzes.get_quiz(principal.workspace_public_id, quiz_id)
     )
 
 
@@ -514,7 +608,9 @@ async def start_attempt(
     quiz_id: UUID, principal: Auth, service: Service, idempotency_key: RequestKey
 ) -> AttemptCreated:
     return AttemptCreated.model_validate(
-        await service.store.start_attempt(principal.workspace_public_id, quiz_id, idempotency_key)
+        await service.store.attempts.start_attempt(
+            principal.workspace_public_id, quiz_id, idempotency_key
+        )
     )
 
 
@@ -522,7 +618,9 @@ async def start_attempt(
 async def list_attempts(quiz_id: UUID, principal: Auth, service: Service) -> list[AttemptSummary]:
     return [
         AttemptSummary.model_validate(item)
-        for item in await service.store.list_attempts(principal.workspace_public_id, quiz_id)
+        for item in await service.store.attempts.list_attempts(
+            principal.workspace_public_id, quiz_id
+        )
     ]
 
 
@@ -531,7 +629,7 @@ async def get_attempt(
     quiz_id: UUID, attempt_id: UUID, principal: Auth, service: Service
 ) -> AttemptDetail:
     return AttemptDetail.model_validate(
-        await service.store.get_attempt(principal.workspace_public_id, quiz_id, attempt_id)
+        await service.store.attempts.get_attempt(principal.workspace_public_id, quiz_id, attempt_id)
     )
 
 
@@ -544,7 +642,7 @@ async def save_answer(
     principal: Auth,
     service: Service,
 ) -> dict[str, Any]:
-    return await service.store.save_answer(
+    return await service.store.attempts.save_answer(
         principal.workspace_public_id,
         quiz_id,
         attempt_id,
@@ -559,7 +657,9 @@ async def submit_attempt(
     quiz_id: UUID, attempt_id: UUID, principal: Auth, service: Service
 ) -> AttemptSummary:
     return AttemptSummary.model_validate(
-        await service.store.submit_attempt(principal.workspace_public_id, quiz_id, attempt_id)
+        await service.store.attempts.submit_attempt(
+            principal.workspace_public_id, quiz_id, attempt_id
+        )
     )
 
 
@@ -571,5 +671,7 @@ async def retry_grading(
 ) -> AttemptSummary:
     await enforce_rate_limit(limiter, action="quiz", subject=str(principal.workspace_public_id))
     return AttemptSummary.model_validate(
-        await service.store.retry_grading(principal.workspace_public_id, quiz_id, attempt_id)
+        await service.store.attempts.retry_grading(
+            principal.workspace_public_id, quiz_id, attempt_id
+        )
     )

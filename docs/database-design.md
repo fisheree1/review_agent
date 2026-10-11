@@ -325,3 +325,6 @@ RLS 不能替代应用授权；后台任务、迁移和管理员连接要明确�
 
 纯数据迁移，无表结构变化。对话消息不再由消息 Worker 直接处理；状态为 `queued`/`processing` 且没有 `agent_runs` 行的消息，各创建一个 `study-graph-v5`、`plan` 阶段的排队运行（`usage.migrated_from = "legacy-message"`），消息改回 `queued` 并清除旧 fence/租约。已有运行或已结束的消息不变。降级只删除带该标记、仍为 `queued`/`plan` 且 `revision = 0` 的运行，使消息回到旧路径；已开始执行的运行保留。
 
+### 0020：运行变化通知
+
+新增 `notify_agent_run_change()` 与 `agent_runs` 上的插入、更新两个触发器；更新触发器仅在 `status`、`stage`、`revision` 或 `outputs` 变化时执行 `pg_notify('agent_run_events', public_id)`。载荷只有运行 UUID，不含工作区、正文或输出；监听方必须经授权 API 重新读取。无表结构变化，降级删除触发器与函数。
