@@ -350,11 +350,16 @@ async def verify() -> None:
         )
         try:
             watched = await request("What resists outliers?")
-            other = await service.create_conversation(owner.public_id, "Other", [first], [])
+            other_conversation = await service.create_conversation(
+                owner.public_id, "Other", [first], []
+            )
             unrelated = UUID(
                 (
                     await service.ask(
-                        owner.public_id, UUID(other["id"]), str(uuid4()), "Unrelated question"
+                        owner.public_id,
+                        UUID(other_conversation["id"]),
+                        str(uuid4()),
+                        "Unrelated question",
                     )
                 )["run_id"]
             )
