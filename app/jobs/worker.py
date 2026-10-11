@@ -24,6 +24,7 @@ from app.jobs.lanes import (
     run_lanes,
 )
 from app.learning.application import LearningProcessor
+from app.learning.focused_answer import reader_answerer
 from app.learning.run_application import AgentRunProcessor
 from app.learning.run_store import SqlAgentRunStore
 from app.learning.store import SqlLearningStore
@@ -76,7 +77,11 @@ async def run_worker() -> None:
 
     model_client = httpx.AsyncClient(follow_redirects=False)
     models = CloudModels(ModelSettings(), model_client)
-    rag = RagProcessor(SqlRagStore(async_session_factory, RagSettings().profile), models, models)
+    rag = RagProcessor(
+        SqlRagStore(async_session_factory, RagSettings().profile),
+        models,
+        reader_answerer(models, models),
+    )
     learning = LearningProcessor(
         SqlLearningStore(async_session_factory, RagSettings().profile), models, models
     )
@@ -87,7 +92,6 @@ async def run_worker() -> None:
             INTERACTIVE,
             (
                 NamedStep("rag_question", rag.process_question),
-                NamedStep("conversation_message", learning.process_message),
                 NamedStep("quiz_grading", learning.process_grading),
             ),
             settings.worker_interactive_concurrency,

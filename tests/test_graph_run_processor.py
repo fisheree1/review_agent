@@ -11,7 +11,7 @@ from app.learning.graph_tasks import GraphTaskPlan
 from app.learning.run_application import AgentRunProcessor
 from app.learning.run_store import SqlAgentRunStore
 from app.learning.workflow import GRAPH_VERSION
-from app.rag.domain import STUDY_PROMPT_VERSION, Evidence
+from app.rag.domain import STUDY_PROMPT_VERSION, Evidence, RagFailure
 from app.rag.ports import Embeddings
 
 USAGE = {"model": "fake", "prompt_tokens": 20, "completion_tokens": 5}
@@ -212,3 +212,33 @@ def test_stage_reports_measured_time_against_its_own_reservation() -> None:
     asyncio.run(worker.process_next())
     run_id, seconds, reserved = store.record_duration.call_args.args
     assert reserved == 15 and 0 <= seconds < 15
+
+
+def test_weak_practice_uses_store_selected_weak_topics_not_a_model_topic() -> None:
+    plan = {**QUIZ_PLAN, "steps": ["quiz", "review", "practice"], "weak_topics": ["robust median"]}
+    worker, store, model = setup("weak", plan)
+    worker.embeddings.embed.return_value = [[1.0] + [0.0] * 1023]
+    store.quiz_sources.return_value = []
+    asyncio.run(worker.process_next())
+    # The Quiz topic comes from the scored attempt, never from the planning model.
+    assert store.quiz_sources.call_args.args[3] == "robust median"
+    model.plan_graph_task.assert_not_awaited()
+
+
+def test_review_without_submitted_practice_publishes_guidance_without_model_calls() -> None:
+    worker, store, model = setup("review", {"steps": ["review"]})
+    store.review.return_value = None
+    asyncio.run(worker.process_next())
+    store.publish_review.assert_awaited_once()
+    assert store.publish_review.call_args.args[2] is None
+    worker.embeddings.embed.assert_not_awaited()
+    model.generate_quiz_with_usage.assert_not_awaited()
+
+
+def test_cancel_before_quiz_generation_creates_no_quiz_and_no_paid_call() -> None:
+    worker, store, model = setup("quiz", QUIZ_PLAN)
+    store.ensure_active.side_effect = RagFailure("AGENT_RUN_INACTIVE", "cancelled")
+    asyncio.run(worker.process_next())
+    model.generate_quiz_with_usage.assert_not_awaited()
+    store.publish_quiz.assert_not_awaited()
+    assert store.fail.call_args.args[2] == "AGENT_RUN_INACTIVE"

@@ -320,3 +320,8 @@ RLS 不能替代应用授权；后台任务、迁移和管理员连接要明确�
 复用 `agent_runs.usage` JSONB 的 `answer_validation`，无新增列或迁移。最多保留 16 条 `{stage,attempt,reason,point?,citation?,length?}`，尝试序号仅 0/1，原因使用固定白名单，位置/长度为有界整数；拒绝任意额外字段、文档文字、模型回答或供应商错误载荷。写入先检查工作区、活动运行和租约 fence，同 `(stage,attempt)` 重放不重复追加。
 
 每个生成调用仍使用 `(run_id,stage,ordinal)` 回执。已收到的截断/非法 JSON 以内部固定错误标记记录可靠用量，可在同范围有界修复；两次调用各记录实际收费，恢复只回放已收到结果，未知请求继续阻塞。模型返回的摘录编号在适配器内解析为准确 quote 后才保存，公共答案结构不增加 quote_id。发布/取消/删除沿用现有回执私有内容清理与来源级联；诊断没有原文副本。部署顺序与版本兼容见[架构第 17 节](./architecture.md#17-真实-pdf-评测后的生成可靠性study-graph-v5)。
+
+### 0019：旧消息交给持久运行
+
+纯数据迁移，无表结构变化。对话消息不再由消息 Worker 直接处理；状态为 `queued`/`processing` 且没有 `agent_runs` 行的消息，各创建一个 `study-graph-v5`、`plan` 阶段的排队运行（`usage.migrated_from = "legacy-message"`），消息改回 `queued` 并清除旧 fence/租约。已有运行或已结束的消息不变。降级只删除带该标记、仍为 `queued`/`plan` 且 `revision = 0` 的运行，使消息回到旧路径；已开始执行的运行保留。
+

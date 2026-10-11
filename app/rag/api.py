@@ -42,11 +42,15 @@ class CitationResponse(BaseModel):
 class ClaimResponse(BaseModel):
     text: str
     citations: list[CitationResponse]
+    # Per-point teaching; absent on answers recorded before reader questions used it.
+    title: str | None = None
+    explanation: str | None = None
 
 
 class AnswerResponse(BaseModel):
     insufficient_evidence: bool
     claims: list[ClaimResponse]
+    explanation: str | None = None
 
 
 class QuestionResponse(BaseModel):

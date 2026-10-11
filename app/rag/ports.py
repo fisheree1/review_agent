@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from typing import Any, Protocol
 from uuid import UUID
 
@@ -36,7 +37,13 @@ class Embeddings(Protocol):
     async def embed(self, texts: list[str], *, query: bool = False) -> list[list[float]]: ...
 
 
-class AnswerModel(Protocol):
-    async def answer(
-        self, question: str, sources: list[Evidence]
+SourceSearch = Callable[[list[float], str], Awaitable[list[Evidence]]]
+RunCheck = Callable[[], Awaitable[None]]
+
+
+class QuestionAnswerer(Protocol):
+    """Scoped retrieval plus validated generation, supplied by the composition root."""
+
+    async def __call__(
+        self, question: str, *, search: SourceSearch, ensure_active: RunCheck
     ) -> tuple[dict[str, Any], dict[str, Any]]: ...

@@ -268,6 +268,8 @@ button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible
 .question-answer { border-top: 1px solid var(--line); padding: 1.2rem 0; overflow-wrap: anywhere; }
 .question-answer h3 { font-size: 1rem; }
 .answer-claim p { white-space: pre-wrap; line-height: 1.85; }
+.answer-claim h4 { margin: 0 0 4px; }
+.answer-claim__explanation { color: var(--text-soft); }
 .citation-link { background: var(--accent-soft); color: var(--accent); border: 0; border-radius: 5px; padding: .5rem; margin: 0 .4rem .4rem 0; text-align: left; font: inherit; font-size: .8rem; cursor: pointer; }
 .citation-preview { border-bottom: 1px solid var(--line); padding: 1rem; }
 .citation-preview h3 { font-size: .95rem; }

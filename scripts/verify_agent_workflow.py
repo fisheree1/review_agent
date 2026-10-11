@@ -65,7 +65,7 @@ async def verify() -> None:
         )
         session.add_all([owner, foreign])
         await session.flush()
-    store = SqlLearningStore(sessions, PROFILE, graph_enabled=True)
+    store = SqlLearningStore(sessions, PROFILE)
     runs = SqlAgentRunStore(store)
     model = Models()
     worker = AgentRunProcessor(runs, model, model)

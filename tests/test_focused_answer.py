@@ -5,7 +5,7 @@ from uuid import uuid4
 import pytest
 
 from app.learning.agent import StudyGenerationModel
-from app.learning.focused_answer import answer_focused
+from app.learning.focused_answer import answer_focused, reader_answerer
 from app.rag.domain import STUDY_PROMPT_VERSION, Evidence, RagFailure
 from app.rag.ports import Embeddings
 
@@ -97,3 +97,16 @@ def test_focused_answer_rejects_invalid_citation_budget_overrun_and_cancel(failu
         )
     if failure == "cancel":
         model.answer_study.assert_not_awaited()
+
+
+def test_reader_questions_get_the_same_validated_per_point_answer_as_conversations() -> None:
+    source, model, embeddings, search, active = setup()
+    answer, usage = asyncio.run(
+        reader_answerer(embeddings, model)("Why median?", search=search, ensure_active=active)
+    )
+    claim = answer["claims"][0]
+    assert claim["title"] == "Median" and claim["explanation"].startswith("Sorting")
+    assert claim["citations"][0]["source_id"] == str(source.id)
+    # The reliable path asks for per-point teaching and records its generation strategy.
+    assert model.answer_study.call_args.kwargs["mode"] == "focused"
+    assert usage["model_calls"] == 1 and "generation_strategy" in usage

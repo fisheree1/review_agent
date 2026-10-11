@@ -127,7 +127,7 @@ async def verify() -> None:
                     embedding=VECTOR,
                 )
             )
-    learning = SqlLearningStore(sessions, PROFILE, graph_enabled=True)
+    learning = SqlLearningStore(sessions, PROFILE)
     service = LearningService(learning)
     runs = SqlAgentRunStore(learning)
     conversation = await service.create_conversation(owner.public_id, "Overview", [selected], [])

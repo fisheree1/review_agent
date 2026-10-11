@@ -28,6 +28,8 @@ from app.documents.infrastructure.repository import SqlAlchemyDocumentsUnitOfWor
 from app.learning.api import get_learning_service
 from app.learning.application import LearningProcessor, LearningService
 from app.learning.models import Conversation, ConversationMessage, Quiz, QuizAnswer, QuizAttempt
+from app.learning.run_application import AgentRunProcessor
+from app.learning.run_store import SqlAgentRunStore
 from app.learning.store import SqlLearningStore
 from app.main import app
 from app.rag.domain import STUDY_PROMPT_VERSION, Evidence, RagFailure
@@ -293,7 +295,7 @@ async def expect_error(coro: Any, code: str) -> None:
     try:
         await coro
         raise AssertionError(f"Expected {code}")
-    except ApplicationError as exc:
+    except (ApplicationError, RagFailure) as exc:
         assert exc.code == code, exc.code
 
 
@@ -321,6 +323,14 @@ async def verify() -> None:
     service = LearningService(store)
     fake_model = FakeModels()
     processor = LearningProcessor(store, FakeModels(), fake_model)
+    runs = SqlAgentRunStore(store)
+    run_worker = AgentRunProcessor(runs, FakeModels(), fake_model)
+
+    async def drain() -> None:
+        # Every conversation message is a durable run; process stages until none is queued.
+        while await run_worker.process_next():
+            pass
+
     try:
         collection = await service.create_collection(workspace_id_1, "Course", "Synthetic set")
         collection_id = UUID(collection["id"])
@@ -343,7 +353,7 @@ async def verify() -> None:
         assert (
             await service.ask(workspace_id_1, conversation_id, "one", "What resists outliers?")
         )["id"] == first_message["id"]
-        await processor.process_message()
+        await drain()
         assert fake_model.answer_document_ids == {first, second}
         detail = await store.get_conversation(workspace_id_1, conversation_id)
         assert detail["messages"][0]["status"] == "answered"
@@ -379,19 +389,17 @@ async def verify() -> None:
         second_message = await service.ask(
             workspace_id_1, conversation_id, "two", "How does it initialize?"
         )
-        task = await store.claim_message()
-        assert task is not None and task[4][0]["document_id"] == str(second)
-        assert task[5] == []
-        sources = await store.message_sources(task[0], task[1], VECTOR, task[3])
+        task = await runs.claim()
+        assert task is not None and task["scope"][0]["document_id"] == str(second)
+        assert task["history"] == []
+        run_id, fence = UUID(task["id"]), task["fence"]
+        sources = await runs.sources(run_id, fence, VECTOR, task["request"])
         assert sources and {source.document_id for source in sources} == {second}
         await store.cancel_message(workspace_id_1, conversation_id, UUID(second_message["id"]))
-        try:
-            await store.ensure_message_active(task[0], task[1])
-            raise AssertionError("Cancelled message must stop the Agent")
-        except RagFailure as exc:
-            assert exc.code == "AGENT_RUN_INACTIVE"
-        await store.finish_message(
-            task[0], task[1], {"insufficient_evidence": True, "claims": []}, {}
+        await expect_error(runs.ensure_active(run_id, fence), "AGENT_RUN_INACTIVE")
+        await expect_error(
+            runs.publish_summary(run_id, fence, {"insufficient_evidence": True, "claims": []}, {}),
+            "AGENT_RUN_INACTIVE",
         )
         assert (await store.get_conversation(workspace_id_1, conversation_id))["messages"][1][
             "status"
@@ -399,7 +407,7 @@ async def verify() -> None:
         refusal = await service.ask(
             workspace_id_1, conversation_id, "refusal", "What is the exam date?"
         )
-        await processor.process_message()
+        await drain()
         assert (await store.get_conversation(workspace_id_1, conversation_id))["messages"][2][
             "status"
         ] == "insufficient"
@@ -465,7 +473,7 @@ async def verify() -> None:
         guidance = await service.ask(
             workspace_id_1, conversation_id, "review-no-context", "Explain my mistakes."
         )
-        await processor.process_message()
+        await drain()
         messages = (await store.get_conversation(workspace_id_1, conversation_id))["messages"]
         assert (
             next(item for item in messages if item["id"] == guidance["id"])["task_result"]["kind"]
@@ -475,7 +483,7 @@ async def verify() -> None:
         chat = await service.ask(
             workspace_id_1, conversation_id, "chat-quiz", "Create a two-question quiz."
         )
-        await processor.process_message()
+        await drain()
         chat_result = next(
             item
             for item in (await store.get_conversation(workspace_id_1, conversation_id))["messages"]
@@ -488,7 +496,7 @@ async def verify() -> None:
                 workspace_id_1, conversation_id, "chat-quiz", "Create a two-question quiz."
             )
         )["task_result"]["quiz_id"] == str(chat_quiz_id)
-        assert not await processor.process_message()
+        assert not await run_worker.process_next()
         chat_quiz = await store.get_quiz(workspace_id_1, chat_quiz_id)
         assert chat_quiz["question_count"] == 2 and all(
             question["answer"] is None for question in chat_quiz["questions"]
@@ -508,11 +516,11 @@ async def verify() -> None:
         ] == ["robust statistics"]
         for key, request, kind in [
             ("chat-review", "Explain my mistakes.", "review"),
-            ("chat-weak", "Practice my weak topics.", "quiz"),
+            ("chat-weak", "Practice my weak topics.", "review"),
             ("chat-unsupported", "Delete the source document.", "clarification"),
         ]:
             created_task = await service.ask(workspace_id_1, conversation_id, key, request)
-            await processor.process_message()
+            await drain()
             task_result = next(
                 item
                 for item in (await store.get_conversation(workspace_id_1, conversation_id))[
@@ -524,7 +532,10 @@ async def verify() -> None:
             if kind == "review":
                 assert task_result["attempt_id"] == str(chat_attempt_id)
             if key == "chat-weak":
-                assert (await store.get_quiz(workspace_id_1, UUID(task_result["quiz_id"])))[
+                # The review stays the message result; the practice Quiz is the run's output.
+                outputs = (await runs.get(workspace_id_1, UUID(created_task["run_id"])))["outputs"]
+                assert outputs[-1]["kind"] == "quiz"
+                assert (await store.get_quiz(workspace_id_1, UUID(outputs[-1]["quiz_id"])))[
                     "config"
                 ]["topic"] == "robust statistics"
         await expect_error(
@@ -536,19 +547,28 @@ async def verify() -> None:
         cancelled_task = await service.ask(
             workspace_id_1, conversation_id, "chat-cancel-quiz", "Create a two-question quiz."
         )
-        claimed_message = await store.claim_message()
-        assert claimed_message is not None
-        await store.prepare_message_quiz(claimed_message[0], claimed_message[1], "Cancelled Quiz")
+        assert await run_worker.process_next()  # plan only; the Quiz stage is now queued
+        claimed_run = await runs.claim()
+        assert claimed_run is not None and claimed_run["stage"] == "quiz"
+        cancelled_run, cancelled_fence = UUID(claimed_run["id"]), claimed_run["fence"]
+        await runs.reserve_quiz(cancelled_run, cancelled_fence)
+        async with sessions() as session:
+            quizzes_before = await session.scalar(
+                select(func.count()).select_from(Quiz).where(Quiz.workspace_id == owner_internal)
+            )
         await store.cancel_message(workspace_id_1, conversation_id, UUID(cancelled_task["id"]))
-        await store.finish_message_quiz(
-            claimed_message[0], claimed_message[1], "Cancelled Quiz", config, [], {}
+        await expect_error(
+            runs.publish_quiz(cancelled_run, cancelled_fence, config, [], {}),
+            "AGENT_RUN_INACTIVE",
         )
         async with sessions() as session:
             assert (
                 await session.scalar(
-                    select(func.count()).select_from(Quiz).where(Quiz.title == "Cancelled Quiz")
+                    select(func.count())
+                    .select_from(Quiz)
+                    .where(Quiz.workspace_id == owner_internal)
                 )
-                == 0
+                == quizzes_before
             )
         async with sessions.begin() as session:
             foreign_quiz = Quiz(
@@ -652,22 +672,29 @@ async def verify() -> None:
         reserved_task = await service.ask(
             workspace_id_1, conversation_id, "quota-reservation", "Create a two-question quiz."
         )
-        reserved_message = await store.claim_message()
-        assert reserved_message is not None and str(reserved_message[0]) == reserved_task["id"]
-        await store.prepare_message_quiz(*reserved_message[:2], "Reserved Quiz")
+        assert await run_worker.process_next()  # plan the reserved request
+        reserved_run = await runs.claim()
+        assert reserved_run is not None and reserved_run["id"] == reserved_task["run_id"]
+        await runs.reserve_quiz(UUID(reserved_run["id"]), reserved_run["fence"])
         await expect_error(
             service.create_quiz(
                 workspace_id_1, "quota-blocked", "Blocked Quiz", config, [first], []
             ),
             "QUIZ_LIMIT",
         )
-        blocked_task = await service.ask(
-            workspace_id_1, conversation_id, "quota-chat-blocked", "Create a two-question quiz."
+        # Runs are serialized per conversation, so the competing request uses another one.
+        quota_conversation = UUID(
+            (await service.create_conversation(workspace_id_1, "Quota", [first], []))["id"]
         )
-        await processor.process_message()
+        blocked_task = await service.ask(
+            workspace_id_1, quota_conversation, "quota-chat-blocked", "Create a two-question quiz."
+        )
+        await drain()
         blocked = next(
             item
-            for item in (await store.get_conversation(workspace_id_1, conversation_id))["messages"]
+            for item in (await store.get_conversation(workspace_id_1, quota_conversation))[
+                "messages"
+            ]
             if item["id"] == blocked_task["id"]
         )
         assert blocked["status"] == "failed" and blocked["failure_code"] == "QUIZ_LIMIT"

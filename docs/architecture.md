@@ -283,3 +283,7 @@ Web 从已校验 claims 构建知识点阅读区；右侧 PDF 面板显示该点
 
 计时按阶段类型预留：有模型调用的阶段预留 110 秒（即阶段超时），PDF 和复习这类本地阶段预留 15 秒。阶段结束后用实测耗时替换预留，未用完的部分退回；Worker 崩溃时预留保留，所以累计用量只会偏保守。`execution_seconds` 因此反映实际耗时，`observed_seconds` 保留原始观测值。上限仍为 770 秒（v1）与 1,540 秒（v5）。
 
+## 19. 单一执行路径（ADR-0005）
+
+对话消息只经由 `AgentRunProcessor` 处理：`ask` 总是创建 `agent_runs` 行，`AGENT_GRAPH_ENABLED` 开关与直接处理消息的 `LearningProcessor.process_message` 已删除，迁移 `0019` 把遗留的排队消息交给运行。阅读页单资料问答仍保留 `rag_questions` 表与原有 API，但 `RagProcessor` 不再自带检索后生成的流程：Worker 组装时注入 `reader_answerer`，与对话共用 `answer_focused` 的一次检索、一次生成和逐点校验，回答增加可选的 `title`/`explanation` 字段（向后兼容）。`rag` 模块只定义 `QuestionAnswerer` 端口，不依赖 `learning`。独立出题已在第 1 阶段与对话共用 `generate_scoped_quiz`。
+

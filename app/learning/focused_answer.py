@@ -5,7 +5,7 @@ from typing import Any
 from app.learning.agent import AgentBudget, RunCheck, SourceSearch, StudyGenerationModel
 from app.learning.study_generation import ValidationRecorder, generate_study
 from app.rag.domain import STUDY_PROMPT_VERSION, validate_study_answer, validate_vectors
-from app.rag.ports import Embeddings
+from app.rag.ports import Embeddings, QuestionAnswerer
 
 
 async def answer_focused(
@@ -60,3 +60,22 @@ async def answer_focused(
         "prompt_tokens": budget.prompt_tokens,
         "completion_tokens": budget.completion_tokens,
     }
+
+
+def reader_answerer(embeddings: Embeddings, model: StudyGenerationModel) -> QuestionAnswerer:
+    """Reader questions use the same retrieval, generation and validation as conversations."""
+
+    async def answer(
+        question: str, *, search: SourceSearch, ensure_active: RunCheck
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        return await answer_focused(
+            question,
+            [],
+            embeddings=embeddings,
+            model=model,
+            search=search,
+            ensure_active=ensure_active,
+            reliable=True,
+        )
+
+    return answer

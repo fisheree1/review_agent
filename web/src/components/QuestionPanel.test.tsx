@@ -28,3 +28,13 @@ test("failed index explains recovery and disables question submission", async ()
   expect(screen.getByRole("button", { name: "重试建立索引" })).toBeEnabled();
   expect(screen.getByRole("button", { name: "提问" })).toBeDisabled();
 });
+
+test("per-point answers show each point's title and explanation with its sources", async () => {
+  vi.mocked(rag.getIndex).mockResolvedValue({ status: "ready", completed: 2, total: 2, failure_message: null });
+  const citation = { source_id: "source", unit: 3, quote: "The median resists outliers.", locator: { kind: "page" as const, position: 3, title: null, path: [] } };
+  vi.mocked(rag.getQuestions).mockResolvedValue([{ id: "q", question: "Why median?", version: 1, status: "answered", failure_message: null, answer: { insufficient_evidence: false, explanation: "Centre measures differ.", claims: [{ title: "Median", text: "Median is robust.", explanation: "Only the middle position matters.", citations: [citation] }] } }]);
+  render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><QuestionPanel documentId="doc" filename="sample.pdf" onCitation={() => {}} /></QueryClientProvider>);
+  expect(await screen.findByRole("heading", { name: "1. Median" })).toBeInTheDocument();
+  expect(screen.getByText("Only the middle position matters.")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: /查看引用/ })).toBeInTheDocument();
+});

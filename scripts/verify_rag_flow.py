@@ -24,6 +24,7 @@ from app.documents.infrastructure.models import (
     DocumentVersionModel,
     WorkspaceModel,
 )
+from app.learning.focused_answer import reader_answerer
 from app.main import app
 from app.rag.api import get_rag_service
 from app.rag.application import RagProcessor, RagService
@@ -46,19 +47,27 @@ class FakeModels:
             self.embedded += len(texts)
         return [[1.0] + [0.0] * 1023 for _ in texts]
 
-    async def answer(
-        self, question: str, sources: list[Evidence]
+    async def answer_study(
+        self,
+        question: str,
+        sources: list[Evidence],
+        *,
+        history: list[dict[str, str]] | None = None,
+        mode: str = "focused",
+        repair_feedback: dict[str, Any] | None = None,
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         source = sources[0]
         return {
             "insufficient_evidence": False,
             "claims": [
                 {
+                    "title": "Median",
                     "text": "The median resists outliers.",
+                    "explanation": "Only the middle position of sorted values matters.",
                     "citations": [{"source_id": str(source.id), "quote": source.content[:80]}],
                 }
             ],
-        }, {}
+        }, {"model": "fake", "prompt_tokens": 30, "completion_tokens": 10}
 
 
 async def seed(workspace: UUID, *, long: bool = False) -> tuple[Scope, int, int]:
@@ -118,7 +127,7 @@ async def verify() -> None:
         owners.append(other_owner)
         store = SqlRagStore(sessions, PROFILE)
         models = FakeModels()
-        processor = RagProcessor(store, models, models)
+        processor = RagProcessor(store, models, reader_answerer(models, models))
 
         assert (await store.index(scope))["status"] == "not_indexed"
         await store.index(scope, "first")
@@ -178,6 +187,8 @@ async def verify() -> None:
         result = await store.question(scope, UUID(question["id"]))
         assert result["status"] == "answered"
         assert result["answer"]["claims"][0]["citations"][0]["unit"] in (1, 2)
+        # Reader questions share the validated per-point answer used by conversations.
+        assert result["answer"]["claims"][0]["title"] == "Median"
         try:
             await store.question(Scope(foreign.workspace, scope.document), UUID(question["id"]))
             raise AssertionError("Workspace isolation failed")

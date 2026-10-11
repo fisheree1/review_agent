@@ -40,7 +40,6 @@ class EnvironmentSettings(BaseSettings):
 
 
 class AgentSettings(EnvironmentSettings):
-    agent_graph_enabled: bool = True
     agent_wait_days: int = Field(default=7, ge=1, le=30)
 
 
