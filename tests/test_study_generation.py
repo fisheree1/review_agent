@@ -7,7 +7,7 @@ from uuid import uuid4
 
 import pytest
 
-from app.learning.agent import AgentBudget, StudyPlanningModel
+from app.learning.agent import AgentBudget, StudyGenerationModel
 from app.learning.study_generation import generate_study
 from app.rag.domain import AnswerValidationFailure, Evidence, RagFailure, canonical_excerpt
 
@@ -28,7 +28,7 @@ def fixture():
         ],
     }
     usage = {"prompt_tokens": 100, "completion_tokens": 50}
-    model = AsyncMock(spec=StudyPlanningModel)
+    model = AsyncMock(spec=StudyGenerationModel)
     model.answer_study.return_value = (raw, usage)
     return source, raw, usage, model
 

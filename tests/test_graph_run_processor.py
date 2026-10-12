@@ -11,7 +11,7 @@ from app.learning.application import LearningModel
 from app.learning.graph_tasks import GraphTaskPlan
 from app.learning.run_application import AgentRunProcessor
 from app.learning.run_store import SqlAgentRunStore
-from app.learning.workflow import GRAPH_VERSION, StudyExecutor
+from app.learning.workflow import GRAPH_VERSION
 from app.rag.domain import STUDY_PROMPT_VERSION, Evidence
 from app.rag.ports import Embeddings
 
@@ -36,8 +36,7 @@ def setup(stage: str, plan: dict | None = None):
     store.review.return_value = None
     model = AsyncMock(spec=LearningModel)
     embeddings = AsyncMock(spec=Embeddings)
-    executor = AsyncMock(spec=StudyExecutor)
-    return AgentRunProcessor(store, embeddings, model, executor), store, model
+    return AgentRunProcessor(store, embeddings, model), store, model
 
 
 def test_graph_planner_uses_same_scope_memory_and_validates_composable_steps() -> None:
@@ -119,14 +118,18 @@ def test_legacy_overview_summary_validates_quote_before_publication() -> None:
     store.fail.assert_awaited_once()
 
 
-def test_v2_focused_question_keeps_receipt_compatible_execution() -> None:
-    worker, store, _ = setup("summary", {"summary_mode": "focused"})
-    store.claim.return_value["graph_version"] = "study-graph-v2"
-    worker.executor.answer.return_value = ({"insufficient_evidence": True, "claims": []}, USAGE)
+@pytest.mark.parametrize("version", ["study-graph-v1", "study-graph-v2"])
+def test_older_focused_questions_resume_on_deterministic_retrieval(version: str) -> None:
+    # In-flight v1/v2 runs no longer need the removed model-driven tool loop.
+    worker, store, model = setup("summary", {"summary_mode": "focused"})
+    store.claim.return_value["graph_version"] = version
+    worker.embeddings.embed.return_value = [[1.0] + [0.0] * 1023]
+    store.sources.return_value = []
     asyncio.run(worker.process_next())
-    worker.executor.answer.assert_awaited_once()
+    store.fail.assert_not_awaited()
+    model.answer_study.assert_not_awaited()
     store.overview_sources.assert_not_awaited()
-    store.publish_summary.assert_awaited_once()
+    assert store.publish_summary.call_args.args[2]["insufficient_evidence"] is True
 
 
 def test_pdf_stage_publishes_only_persisted_summary() -> None:
@@ -143,8 +146,6 @@ def test_v3_focused_stage_bypasses_tool_planning_and_uses_recorded_calls() -> No
     worker.embeddings.embed.return_value = [[1.0] + [0.0] * 1023]
     store.sources.return_value = []
     asyncio.run(worker.process_next())
-    worker.executor.answer.assert_not_awaited()
-    model.plan_step.assert_not_awaited()
     store.publish_summary.assert_awaited_once()
     assert store.begin_call.call_args.args[3] == "embed"
     assert store.publish_summary.call_args.args[3]["graph_version"] == GRAPH_VERSION
@@ -194,3 +195,54 @@ def test_overview_versions_resume_one_bounded_batch_and_keep_its_citations(versi
     assert store.publish_summary.call_args.args[2]["claims"][0]["citations"][0]["unit"] == 120
     assert store.publish_summary.call_args.args[4] == coverage
     assert model.answer_study.call_args.kwargs["mode"] == "overview"
+
+
+QUIZ_PLAN = {
+    "steps": ["quiz"],
+    "title": "Practice",
+    "config": {
+        "type_counts": {"single": 1, "multiple": 0, "true_false": 0, "short": 0},
+        "difficulty": "medium",
+        "language": "en",
+        "topic": "",
+    },
+}
+
+
+def test_quiz_stage_uses_one_generation_on_application_selected_evidence() -> None:
+    worker, store, model = setup("quiz", QUIZ_PLAN)
+    source = Evidence(
+        uuid4(),
+        "The median resists extreme values.",
+        2,
+        {"kind": "page", "position": 2, "title": None, "path": []},
+        document_id=uuid4(),
+        version_id=1,
+    )
+    store.quiz_sources.return_value = [source]
+    model.generate_quiz_with_usage.return_value = (
+        {
+            "questions": [
+                {
+                    "kind": "single",
+                    "topic": "Median",
+                    "stem": "Which statistic resists extreme values?",
+                    "options": ["Median", "Mean"],
+                    "answer": "Median",
+                    "explanation": "The median depends on order, not magnitude.",
+                    "citations": [{"source_id": str(source.id), "quote": source.content}],
+                }
+            ]
+        },
+        USAGE,
+    )
+    asyncio.run(worker.process_next())
+    store.fail.assert_not_awaited()
+    # No topic: whole-scope sampling, so no embedding call and no model-chosen tools.
+    worker.embeddings.embed.assert_not_awaited()
+    store.quiz_sources.assert_awaited_once()
+    assert store.quiz_sources.call_args.args[2:] == (None, "")
+    model.generate_quiz_with_usage.assert_awaited_once()
+    assert [call.args[3] for call in store.begin_call.call_args_list] == ["generate_quiz"]
+    questions, usage = store.publish_quiz.call_args.args[3:5]
+    assert len(questions) == 1 and usage["model_calls"] == 1

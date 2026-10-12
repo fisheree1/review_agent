@@ -2,8 +2,6 @@ import asyncio
 from typing import Any
 from uuid import NAMESPACE_URL, uuid5
 
-import pytest
-
 from app.rag.domain import Evidence
 from scripts import evaluate_agent
 from scripts.evaluate_agent import EVAL_PATH, Fixture, score_answer
@@ -41,10 +39,7 @@ def test_agent_evaluation_does_not_count_unknown_answers_as_success() -> None:
     ]
 
 
-@pytest.mark.parametrize("engine", ["legacy", "langgraph", "focused"])
-def test_comparison_never_sends_foreign_or_deselected_fixture_text_to_models(
-    monkeypatch, engine
-) -> None:
+def test_comparison_never_sends_foreign_or_deselected_fixture_text_to_models(monkeypatch) -> None:
     embedded: list[str] = []
     fixture = Fixture.model_validate(
         {
@@ -74,18 +69,6 @@ def test_comparison_never_sends_foreign_or_deselected_fixture_text_to_models(
             embedded.extend(texts)
             return [[1.0] * 1024 for _ in texts]
 
-        async def plan_step(self, question: str, *, history, observations):
-            if not observations:
-                decision = {"tool": "search", "query": question}
-            elif len(observations) == 1:
-                decision = {
-                    "tool": "read_source",
-                    "source_id": observations[0]["sources"][0]["source_id"],
-                }
-            else:
-                decision = {"tool": "answer"}
-            return decision, {"prompt_tokens": 20, "completion_tokens": 5}
-
         async def answer(
             self, question: str, sources: list[Evidence], *, history=None
         ) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -109,9 +92,9 @@ def test_comparison_never_sends_foreign_or_deselected_fixture_text_to_models(
             return await self.answer(question, sources, history=history)
 
     monkeypatch.setattr(evaluate_agent, "CloudModels", Model)
-    report = asyncio.run(evaluate_agent.compare(fixture, engine=engine))
+    report = asyncio.run(evaluate_agent.compare(fixture))
     assert all(row["passed"] for row in report["results"])
     agent_row = next(row for row in report["results"] if row["mode"] == "agent")
-    assert agent_row["model_calls"] == (1 if engine == "focused" else 4)
+    assert agent_row["model_calls"] == 1
     assert fixture.documents[1].text not in embedded and fixture.documents[2].text not in embedded
     assert all(document.text not in str(report) for document in fixture.documents)

@@ -32,7 +32,7 @@ from app.learning.overview import (
 )
 from app.learning.pdf_export import PDF_EXPORT_VERSION
 from app.learning.run_models import AgentRun, AgentStageExecution
-from app.learning.scope import missing, retrieve_sources, snapshot_ready
+from app.learning.scope import missing, quiz_evidence, retrieve_sources, snapshot_ready
 from app.learning.store import LEASE_SECONDS, SqlLearningStore
 from app.learning.workflow import (
     BATCHED_GRAPH_VERSIONS,
@@ -411,6 +411,15 @@ class SqlAgentRunStore:
             run = await self._active(session, public_id, fence)
             return await retrieve_sources(
                 session, run.workspace_id, run.scope, run.profile, vector, query
+            )
+
+    async def quiz_sources(
+        self, public_id: UUID, fence: UUID, topic_vector: list[float] | None, topic: str
+    ) -> list[Evidence]:
+        async with self.sessions.begin() as session:
+            run = await self._active(session, public_id, fence)
+            return await quiz_evidence(
+                session, run.workspace_id, run.scope, run.profile, topic_vector, topic
             )
 
     async def overview_sources(

@@ -11,7 +11,7 @@ from app.learning.agent import (
     MAX_COST_UNITS,
     AgentBudget,
     RunCheck,
-    StudyPlanningModel,
+    StudyGenerationModel,
 )
 from app.rag.domain import (
     AnswerValidationFailure,
@@ -55,7 +55,7 @@ async def generate_study(
     sources: list[Evidence],
     history: list[dict[str, str]],
     *,
-    model: StudyPlanningModel,
+    model: StudyGenerationModel,
     budget: AgentBudget,
     ensure_active: RunCheck,
     mode: Literal["focused", "overview"],

@@ -26,7 +26,7 @@ from app.learning.run_models import AgentRun, AgentStageExecution
 from app.learning.scope import (
     ScopeSnapshot,
     missing,
-    quiz_sources,
+    quiz_evidence,
     resolve_scope,
     retrieve_sources,
     snapshot_ready,
@@ -786,6 +786,17 @@ class SqlLearningStore:
                 session, message.workspace_id, message.scope, message.profile, vector, query_text
             )
 
+    async def message_quiz_sources(
+        self, public_id: UUID, fence: UUID, topic_vector: list[float] | None, topic: str
+    ) -> list[Evidence]:
+        async with self.sessions.begin() as session:
+            message = await self._active_message(session, public_id, fence)
+            if message is None:
+                return []
+            return await quiz_evidence(
+                session, message.workspace_id, message.scope, message.profile, topic_vector, topic
+            )
+
     async def ensure_message_active(self, public_id: UUID, fence: UUID) -> None:
         async with self.sessions.begin() as session:
             if await self._active_message(session, public_id, fence) is None:
@@ -1172,17 +1183,9 @@ class SqlLearningStore:
             quiz = await self._active_quiz(session, public_id, fence)
             if quiz is None:
                 return []
-            if topic_vector is not None:
-                return await retrieve_sources(
-                    session,
-                    quiz.workspace_id,
-                    quiz.scope,
-                    quiz.profile,
-                    topic_vector,
-                    topic,
-                    limit=12,
-                )
-            return await quiz_sources(session, quiz.workspace_id, quiz.scope, quiz.profile)
+            return await quiz_evidence(
+                session, quiz.workspace_id, quiz.scope, quiz.profile, topic_vector, topic
+            )
 
     async def finish_quiz(
         self,

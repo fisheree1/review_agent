@@ -4,7 +4,7 @@ from uuid import uuid4
 
 import pytest
 
-from app.learning.agent import StudyPlanningModel
+from app.learning.agent import StudyGenerationModel
 from app.learning.focused_answer import answer_focused
 from app.rag.domain import STUDY_PROMPT_VERSION, Evidence, RagFailure
 from app.rag.ports import Embeddings
@@ -19,7 +19,7 @@ def setup():
         document_id=uuid4(),
         version_id=1,
     )
-    model = AsyncMock(spec=StudyPlanningModel)
+    model = AsyncMock(spec=StudyGenerationModel)
     model.answer_study.return_value = (
         {
             "insufficient_evidence": False,
@@ -55,7 +55,6 @@ def test_focused_answer_uses_one_generation_and_keeps_valid_source_and_explanati
             ensure_active=active,
         )
     )
-    model.plan_step.assert_not_awaited()
     model.answer_study.assert_awaited_once()
     embeddings.embed.assert_awaited_once_with(["Explain median"], query=True)
     assert usage["model_calls"] == 1 and usage["search_calls"] == 1

@@ -6,21 +6,19 @@ from typing import Any, Protocol
 from uuid import UUID
 
 from app.core.errors import ApplicationError
-from app.learning.agent import AgentBudget, StudyPlanningModel, run_scoped_agent
+from app.learning.agent import AgentBudget, StudyGenerationModel
 from app.learning.conversation_tasks import TASK_VERSION, TaskPlanningModel, validate_task_plan
-from app.learning.domain import validate_blueprint, validate_candidates
-from app.learning.quiz_agent import QuizPlanningModel, run_quiz_agent
+from app.learning.domain import validate_blueprint
+from app.learning.focused_answer import answer_focused
+from app.learning.quiz_generation import QuizGenerationModel, generate_scoped_quiz
 from app.learning.store import SqlLearningStore
-from app.rag.domain import Evidence, RagFailure, validate_vectors
+from app.rag.domain import Evidence, RagFailure
 from app.rag.ports import Embeddings
 
 logger = logging.getLogger(__name__)
 
 
-class LearningModel(StudyPlanningModel, QuizPlanningModel, TaskPlanningModel, Protocol):
-    async def generate_quiz(
-        self, config: dict[str, Any], sources: list[Evidence]
-    ) -> dict[str, Any]: ...
+class LearningModel(StudyGenerationModel, QuizGenerationModel, TaskPlanningModel, Protocol):
     async def grade_short(self, items: list[dict[str, Any]]) -> list[dict[str, Any]]: ...
     async def grade_short_with_usage(
         self, items: list[dict[str, Any]]
@@ -143,7 +141,7 @@ class LearningProcessor:
                             *history[-2:],
                             {"question": "最近提交练习的错题", "answer": review["summary"]},
                         ]
-                    answer, usage = await run_scoped_agent(
+                    answer, usage = await answer_focused(
                         question,
                         answer_history,
                         embeddings=self.embeddings,
@@ -159,11 +157,19 @@ class LearningProcessor:
                     config = plan.quiz_config(review["weak_topics"] if review else None)
                     title = plan.title or "学习练习"
                     await self.store.prepare_message_quiz(public_id, fence, title)
-                    questions, usage = await run_quiz_agent(
+
+                    async def quiz_sources(
+                        vector: list[float] | None, topic: str
+                    ) -> list[Evidence]:
+                        return await self.store.message_quiz_sources(
+                            public_id, fence, vector, topic
+                        )
+
+                    questions, usage = await generate_scoped_quiz(
                         config,
                         embeddings=self.embeddings,
                         model=self.model,
-                        search=search,
+                        sources=quiz_sources,
                         ensure_active=ensure_active,
                         budget=budget,
                     )
@@ -232,36 +238,22 @@ class LearningProcessor:
         public_id, fence, _workspace, config, _scope = task
         try:
             async with asyncio.timeout(110):
-                usage = None
-                if config.get("generation_mode") == "agent":
 
-                    async def search(vector: list[float], query: str) -> list[Evidence]:
-                        return await self.store.quiz_evidence(public_id, fence, vector, query)
+                async def sources(vector: list[float] | None, topic: str) -> list[Evidence]:
+                    return await self.store.quiz_evidence(public_id, fence, vector, topic)
 
-                    async def ensure_active() -> None:
-                        await self.store.ensure_quiz_active(public_id, fence)
+                async def ensure_active() -> None:
+                    await self.store.ensure_quiz_active(public_id, fence)
 
-                    questions, usage = await run_quiz_agent(
-                        config,
-                        embeddings=self.embeddings,
-                        model=self.model,
-                        search=search,
-                        ensure_active=ensure_active,
-                    )
-                else:
-                    topic = config.get("topic", "")
-                    vector = None
-                    if topic:
-                        vectors = await self.embeddings.embed([topic], query=True)
-                        validate_vectors(vectors, 1)
-                        vector = vectors[0]
-                    sources = await self.store.quiz_evidence(public_id, fence, vector, topic)
-                    if not sources:
-                        raise RagFailure("QUIZ_NO_EVIDENCE", "没有可用证据")
-                    payload = await self.model.generate_quiz(config, sources)
-                    questions = validate_candidates(payload, config, sources)
-                    if not questions:
-                        raise RagFailure("QUIZ_INVALID", "没有有效题目")
+                # Standard and agent modes share one evidence selection and one generation.
+                questions, usage = await generate_scoped_quiz(
+                    config,
+                    embeddings=self.embeddings,
+                    model=self.model,
+                    sources=sources,
+                    ensure_active=ensure_active,
+                    charge_usage=config.get("generation_mode") == "agent",
+                )
                 await self.store.finish_quiz(public_id, fence, questions, usage)
         except RagFailure as exc:
             await self.store.fail_quiz(public_id, fence, exc.code)

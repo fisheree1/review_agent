@@ -17,7 +17,6 @@ from app.core.database import close_database
 from app.documents.infrastructure.models import DocumentModel, DocumentVersionModel, WorkspaceModel
 from app.learning.api import get_learning_service
 from app.learning.application import LearningProcessor, LearningService
-from app.learning.infrastructure.langgraph_workflow import LangGraphStudyExecutor
 from app.learning.models import Quiz
 from app.learning.run_application import AgentRunProcessor
 from app.learning.run_models import AgentRun, AgentStageExecution
@@ -69,7 +68,7 @@ async def verify() -> None:
     store = SqlLearningStore(sessions, PROFILE, graph_enabled=True)
     runs = SqlAgentRunStore(store)
     model = Models()
-    worker = AgentRunProcessor(runs, model, model, LangGraphStudyExecutor())
+    worker = AgentRunProcessor(runs, model, model)
     service = LearningService(store)
     first = await seed_document(owner, "workflow-a.pdf")
     second = await seed_document(owner, "workflow-b.pdf")
@@ -147,9 +146,7 @@ async def verify() -> None:
         await store.submit_attempt(owner.public_id, quiz_id, attempt_id)
         await store.submit_attempt(owner.public_id, quiz_id, attempt_id)
         # A fresh processor simulates service restart; no in-memory state is required.
-        worker = AgentRunProcessor(
-            SqlAgentRunStore(store), Models(), Models(), LangGraphStudyExecutor()
-        )
+        worker = AgentRunProcessor(SqlAgentRunStore(store), Models(), Models())
         await advance(3)  # grading, review, one weak-topic Quiz
         completed = await runs.get(owner.public_id, run_id)
         assert completed["status"] == "completed" and len(completed["outputs"]) == 4
@@ -160,7 +157,8 @@ async def verify() -> None:
         assert not await worker.process_next()
         async with sessions.begin() as session:
             persisted = await session.scalar(select(AgentRun).where(AgentRun.public_id == run_id))
-            assert persisted is not None and persisted.usage["model_calls"] >= 10
+            # plan, summary, Quiz, grading and weak practice: one model call each.
+            assert persisted is not None and persisted.usage["model_calls"] == 5
             assert (
                 await session.scalar(
                     select(func.count())
@@ -329,9 +327,7 @@ async def verify() -> None:
                 raise RagFailure("AGENT_PLAN_INVALID", "Completed response was invalid")
 
         invalid = await request("Invalid provider response")
-        invalid_worker = AgentRunProcessor(
-            runs, Models(), InvalidModels(), LangGraphStudyExecutor()
-        )
+        invalid_worker = AgentRunProcessor(runs, Models(), InvalidModels())
         assert await invalid_worker.process_next()
         rejected = await runs.get(owner.public_id, invalid)
         assert rejected["status"] == "failed" and rejected["failure_code"] == "AGENT_PLAN_INVALID"

@@ -19,7 +19,6 @@ from app.documents.infrastructure.models import (
 from app.learning.agent import AgentBudget
 from app.learning.application import LearningService
 from app.learning.graph_tasks import GraphTaskPlan
-from app.learning.infrastructure.langgraph_workflow import LangGraphStudyExecutor
 from app.learning.models import ConversationMessage
 from app.learning.run_application import AgentRunProcessor, RecordedCalls, RecordedModels
 from app.learning.run_models import AgentRun, AgentStageExecution
@@ -133,7 +132,7 @@ async def verify() -> None:
     runs = SqlAgentRunStore(learning)
     conversation = await service.create_conversation(owner.public_id, "Overview", [selected], [])
     model = Model(selected)
-    worker = AgentRunProcessor(runs, model, model, LangGraphStudyExecutor())
+    worker = AgentRunProcessor(runs, model, model)
 
     async def new_run() -> UUID:
         message = await service.ask(

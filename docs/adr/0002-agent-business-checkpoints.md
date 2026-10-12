@@ -1,6 +1,6 @@
 # ADR-0002：LangGraph 证据编排与 PostgreSQL 业务检查点
 
-- 状态：Accepted
+- 状态：Accepted；证据编排部分由 [ADR-0003](./0003-deterministic-evidence.md) 取代（已移除 LangGraph），持久化与检查点决定仍有效
 - 日期：2026-09-27
 - 范围：组合学习 Agent 的持久化、等待及恢复。
 

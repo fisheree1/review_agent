@@ -97,7 +97,7 @@ Pydantic schema 对长度、枚举、数量和嵌套深度设置上限。OpenAPI
 
 跨资料隔离、外部调用恢复、引用语义质量、作答并发和部署兼容性的失败场景集中见[技术难点与验证路径](./technical-challenges.md)；选测试时按对应的用户后果裁剪。
 
-LangGraph 迁移按 [接入规划](./langgraph-integration-plan.md) 和 [工作流开发设计](./agent-workflow-development.md) 分阶段开发。组合学习、跨交互等待、业务检查点和草稿修订保护已实现；启用前验证恢复不会重复发布或重置预算。
+学习工作流按 [工作流开发设计](./agent-workflow-development.md) 开发；证据由应用确定性选取，不使用模型工具循环或 LangGraph（[ADR-0003](./adr/0003-deterministic-evidence.md)）。组合学习、跨交互等待、业务检查点和草稿修订保护已实现；修改时验证恢复不会重复发布或重置预算。
 
 当前实现、独立数据库集成检查和云端连接检查见 [RAG 实现与验收](./rag-implementation.md)。普通测试使用假模型；`scripts.verify_model_access` 会调用真实服务，单独执行。供应商错误只记录稳定错误码；配置校验隐藏原始输入，避免异常消息泄露密钥。
 
@@ -199,7 +199,11 @@ React 前端位于 `web/`。服务端状态由 TanStack Query 管理，当前资
 
 ## 学习图开发与验证
 
-应用逻辑只依赖 `StudyExecutor`、`AgentRunPersistence`；LangGraph 与 SQLAlchemy 代码放在适配器，不向领域层导入。修改图/Prompt/计划需提升相应版本，未知版本运行进入阻塞。调用预算跨恢复累计，严禁自动重发未知请求；阶段成果与恢复位置同事务。运行角色不执行 saver setup，不开启包含原文的外部追踪。修改后的重点门禁为图单元、工作区隔离、PostgreSQL 恢复/删除、0013→0014 迁移及完整移动端流程，详见 [工作流设计](./agent-workflow-development.md#12-本次交付与设计调整)。
+应用逻辑只依赖 `AgentRunPersistence` 等端口；SQLAlchemy 代码放在适配器，不向领域层导入。证据选取放在 `focused_answer`、`quiz_generation` 与 `scope.quiz_evidence`，新增检索方式先补评测再改动。修改图/Prompt/计划需提升相应版本，未知版本运行进入阻塞。调用预算跨恢复累计，严禁自动重发未知请求；阶段成果与恢复位置同事务。不开启包含原文的外部追踪。修改后的重点门禁为图单元、工作区隔离、PostgreSQL 恢复/删除、0013→0014 迁移及完整移动端流程，详见 [工作流设计](./agent-workflow-development.md#12-本次交付与设计调整)。
+
+### 回放评测
+
+`evals/replay/*.json` 固定所选来源与按调用顺序录制的模型响应。`pytest -q tests/test_agent_replay.py`（默认门禁已包含）或 `python -m scripts.replay_agent_eval` 不联网，经真实的证据选取、校验、修复和预算代码回放，检查结果、引用来源和模型调用序列是否改变。用例失败表示同样输入下行为变了：先确认质量，再有意识地重新录制，不能直接改期望值迎合实现。提交的样例只用合成文本；`python -m scripts.replay_agent_eval --record <样例> --live` 调用付费模型，结果只写入已忽略的 `evals/local/replay/`，因为真实响应含资料正文与模型载荷。
 
 ### 快速问答与复习的验证
 
@@ -218,7 +222,7 @@ React 前端位于 `web/`。服务端状态由 TanStack Query 管理，当前资
 `python -m scripts.verify_long_pdf_overview --isolated` 必须使用没有工作区的已迁移临时数据库。该脚本构造 72 页正文及越权/未选择资料，验证读取 64 页、8 次有界生成、跨空间隔离、调用结果回放、逐批合并、预算限制保留成果、取消及来源删除。模型为确定性 fixture，不调用外部付费服务。UI 验证使用 `AgentRunCard.test.tsx` 与 `e2e/long-pdf-overview.spec.ts`，覆盖窄屏进度和刷新恢复。
 
 
-知识点联动阅读的定向检查：后端 `tests/test_rag.py`、`test_focused_answer.py`、`test_langgraph_workflow.py`、`test_graph_run_processor.py`、`test_overview.py`、`test_study_pdf.py` 检查逐点结构、范围外来源拒绝、页码解析、旧回执、分批合并及导出；前端 `StudyPage.test.tsx`、`StudySourcePanel.test.tsx`、`PdfPreview.test.tsx` 与 `web/e2e/study-linked-reading.spec.ts` 检查历史兼容、预览失败恢复、跟随开关、跨资料切换、重复下载和 390px 键盘返回。浏览器使用合成 PDF，不调用真实模型；实际讲解质量仍需真实资料评估。
+知识点联动阅读的定向检查：后端 `tests/test_rag.py`、`test_focused_answer.py`、`test_quiz_generation.py`、`test_graph_run_processor.py`、`test_overview.py`、`test_study_pdf.py` 检查逐点结构、范围外来源拒绝、页码解析、旧回执、分批合并及导出；前端 `StudyPage.test.tsx`、`StudySourcePanel.test.tsx`、`PdfPreview.test.tsx` 与 `web/e2e/study-linked-reading.spec.ts` 检查历史兼容、预览失败恢复、跟随开关、跨资料切换、重复下载和 390px 键盘返回。浏览器使用合成 PDF，不调用真实模型；实际讲解质量仍需真实资料评估。
 
 ### v5 PDF 生成质量与诊断验证
 

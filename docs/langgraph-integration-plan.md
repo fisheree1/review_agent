@@ -1,5 +1,7 @@
 # LangGraph 与 LangChain 接入规划
 
+> 状态：已被 [ADR-0003](./adr/0003-deterministic-evidence.md) 取代。当前代码不使用 LangGraph、LangChain 或 LangSmith；本文仅保留决策背景。
+
 日期：2026-09-27。状态：M1–M4 核心能力已实现，生产保持受控开关；M5 的完整真实资料、P95 和货币费用验收尚待完成。持久化方案采用 [ADR-0002](./adr/0002-agent-business-checkpoints.md)，以下原始规划作为设计背景，实际实现以该决策及开发设计的交付记录为准。
 
 用户交互、运行状态、拟新增 API、持久化边界与开发验收细节见 [学习 Agent 工作流开发设计](./agent-workflow-development.md)。本文件说明框架取舍与阶段路线，两者共同说明开发路线与实际交付边界。

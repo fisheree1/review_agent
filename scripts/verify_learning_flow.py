@@ -155,36 +155,6 @@ class FakeModels:
         unrelated = [0.0] * 1023 + [1.0]
         return [unrelated if text == "What is the exam date?" else VECTOR for text in texts]
 
-    async def plan_step(
-        self,
-        question: str,
-        *,
-        history: list[dict[str, str]],
-        observations: list[dict[str, Any]],
-    ) -> tuple[dict[str, Any], dict[str, Any]]:
-        usage = {"model": "fake", "prompt_tokens": 20, "completion_tokens": 5}
-        if not observations:
-            return {"tool": "search", "query": question}, usage
-        discovered = next(item["sources"] for item in observations if item["tool"] == "search")
-        read_ids = {item["source_id"] for item in observations if item["tool"] == "read_source"}
-        read_documents = {
-            item["document_id"] for item in discovered if item["source_id"] in read_ids
-        }
-        for item in discovered:
-            if item["document_id"] not in read_documents:
-                return {"tool": "read_source", "source_id": item["source_id"]}, usage
-        return {"tool": "answer"}, usage
-
-    async def plan_quiz_step(
-        self, config: dict[str, Any], *, observations: list[dict[str, Any]]
-    ) -> tuple[dict[str, Any], dict[str, Any]]:
-        decision, usage = await self.plan_step(
-            config.get("topic") or "core concepts", history=[], observations=observations
-        )
-        if decision["tool"] == "answer":
-            decision = {"tool": "generate_quiz"}
-        return decision, usage
-
     async def generate_quiz_with_usage(
         self, config: dict[str, Any], sources: list[Evidence]
     ) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -628,8 +598,9 @@ async def verify() -> None:
         async with sessions() as session:
             generated = await session.scalar(select(Quiz).where(Quiz.public_id == agent_quiz_id))
             assert generated is not None and generated.generation_usage is not None
-            assert generated.generation_usage["agent_version"] == "scoped-quiz-tools-v1"
-            assert generated.generation_usage["model_calls"] == 4
+            assert generated.generation_usage["quiz_strategy"] == "scoped-quiz-evidence-v1"
+            # Topic retrieval is application code; the model is called once to generate.
+            assert generated.generation_usage["model_calls"] == 1
             assert "outliers" not in str(generated.generation_usage)
         assert "generation_usage" not in await store.get_quiz(workspace_id_1, agent_quiz_id)
         print("PASS: opt-in Quiz planning, private audit, scope isolation and mode idempotency")
