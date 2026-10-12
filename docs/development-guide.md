@@ -123,7 +123,7 @@ Pydantic schema 对长度、枚举、数量和嵌套深度设置上限。OpenAPI
 
 ## 9. 代码质量门禁
 
-Agent 改动同时验证 `uv run python -m scripts.evaluate_agent` 的版本化合成数据集；真实服务对比需显式 `--live`，不进入普通测试。当前统一对话任务需要先升级 `0014_agent_workflows`（包含 `0013` 对话结果和 `0012` Quiz 审计），空库与上一版本升级验证方法见 [Agent 开发计划](./agent-development-plan.md)。
+Agent 改动同时验证 `uv run python -m scripts.evaluate_agent` 的版本化合成数据集；规划提示改动同时运行 `uv run python -m scripts.evaluate_study_plan`（`--live` 才调用付费规划模型，只输出用例 ID 与步骤标签）；真实服务对比需显式 `--live`，不进入普通测试。当前统一对话任务需要先升级 `0014_agent_workflows`（包含 `0013` 对话结果和 `0012` Quiz 审计），空库与上一版本升级验证方法见 [Agent 开发计划](./agent-development-plan.md)。
 
 资料库增强使用 `uv run python -m scripts.verify_frontend_learning` 在独立、空测试数据库验证：服务端全量搜索、字面通配符、两种游标顺序、集合过滤、批量创建回滚、继续学习及工作区隔离。先配置独立 PostgreSQL/pgvector，使用迁移凭据升级到 head，再用非 schema 所有者的 runtime 凭据运行脚本；脚本拒绝含已有工作区的数据库并清理自身合成数据。此增强没有 schema 变更。浏览器验收在 `web/e2e/frontend-experience.spec.ts`，覆盖历史阅读位置、新回复提示、引用预览、题号导航、URL 筛选及 320/390px 布局；组件测试检查失败重试保留选择和精确来源版本。
 
