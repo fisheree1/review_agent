@@ -20,6 +20,7 @@ from app.jobs.models import WorkerHeartbeatModel
 from app.learning.api import router as learning_router
 from app.learning.organization_api import router as organization_router
 from app.learning.review_api import router as review_router
+from app.learning.run_events import close_run_event_hub
 from app.rag.api import router as rag_router
 
 settings = get_settings()
@@ -34,6 +35,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         if limiter is not None:
             await limiter.close()
         get_rate_limiter.cache_clear()
+    await close_run_event_hub()
     await close_database()
 
 

@@ -4,7 +4,7 @@ import asyncio
 
 import pytest
 
-from app.jobs.lanes import Lane, NamedStep, parse_lane_names, run_lanes
+from app.jobs.lanes import Lane, NamedStep, parse_lane_names, run_lanes, throttled
 
 
 def test_lane_names_are_validated_and_deduplicated() -> None:
@@ -91,3 +91,24 @@ def test_concurrency_runs_parallel_slots_of_one_lane() -> None:
         assert peak == 2
 
     asyncio.run(check())
+
+
+def test_throttled_maintenance_runs_at_most_once_per_interval_and_never_counts_as_work() -> None:
+    now = [100.0]
+    calls: list[float] = []
+
+    async def sweep() -> bool:
+        calls.append(now[0])
+        return True
+
+    step = throttled(sweep, seconds=30, clock=lambda: now[0])
+
+    async def check() -> None:
+        assert await step() is False
+        now[0] = 129.0
+        assert await step() is False
+        now[0] = 130.0
+        assert await step() is False
+
+    asyncio.run(check())
+    assert calls == [100.0, 130.0]

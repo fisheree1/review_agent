@@ -436,36 +436,38 @@ async def verify() -> None:
             "IDEMPOTENCY_CONFLICT",
         )
         await processor.process_quiz()
-        quiz_detail = await store.get_quiz(workspace_id_1, quiz_id)
+        quiz_detail = await store.quizzes.get_quiz(workspace_id_1, quiz_id)
         assert quiz_detail["status"] == "ready" and quiz_detail["question_count"] == 2
         assert all(
             question["answer"] is None and not question["sources"]
             for question in quiz_detail["questions"]
         )
-        await expect_error(store.get_quiz(workspace_id_2, quiz_id), "RESOURCE_NOT_FOUND")
-        attempt = await store.start_attempt(workspace_id_1, quiz_id, "attempt-one")
+        await expect_error(store.quizzes.get_quiz(workspace_id_2, quiz_id), "RESOURCE_NOT_FOUND")
+        attempt = await store.attempts.start_attempt(workspace_id_1, quiz_id, "attempt-one")
         attempt_id = UUID(attempt["id"])
         questions = quiz_detail["questions"]
-        await store.save_answer(
+        await store.attempts.save_answer(
             workspace_id_1, quiz_id, attempt_id, UUID(questions[0]["id"]), "Median"
         )
-        await store.save_answer(
+        await store.attempts.save_answer(
             workspace_id_1,
             quiz_id,
             attempt_id,
             UUID(questions[1]["id"]),
             "It does not move much with extreme values.",
         )
-        assert (await store.submit_attempt(workspace_id_1, quiz_id, attempt_id))[
+        assert (await store.attempts.submit_attempt(workspace_id_1, quiz_id, attempt_id))[
             "status"
         ] == "grading"
         await processor.process_grading()
-        result = await store.get_attempt(workspace_id_1, quiz_id, attempt_id)
+        result = await store.attempts.get_attempt(workspace_id_1, quiz_id, attempt_id)
         assert result["status"] == "submitted" and result["score"] == 80.0
         assert result["weak_topics"] == ["robust statistics"]
         assert result["questions"][1]["grading_method"] == "model_hint"
         assert result["questions"][0]["sources"][0]["document_id"] == str(first)
-        assert (await store.submit_attempt(workspace_id_1, quiz_id, attempt_id))["score"] == 80.0
+        assert (await store.attempts.submit_attempt(workspace_id_1, quiz_id, attempt_id))[
+            "score"
+        ] == 80.0
         async with sessions() as session:
             assert await session.scalar(select(func.count()).select_from(QuizAnswer)) == 2
         print("PASS: quiz validation, answer privacy, grading, weak topics, idempotency")
@@ -497,21 +499,23 @@ async def verify() -> None:
             )
         )["task_result"]["quiz_id"] == str(chat_quiz_id)
         assert not await run_worker.process_next()
-        chat_quiz = await store.get_quiz(workspace_id_1, chat_quiz_id)
+        chat_quiz = await store.quizzes.get_quiz(workspace_id_1, chat_quiz_id)
         assert chat_quiz["question_count"] == 2 and all(
             question["answer"] is None for question in chat_quiz["questions"]
         )
-        chat_attempt = await store.start_attempt(workspace_id_1, chat_quiz_id, "chat-attempt")
+        chat_attempt = await store.attempts.start_attempt(
+            workspace_id_1, chat_quiz_id, "chat-attempt"
+        )
         chat_attempt_id = UUID(chat_attempt["id"])
-        await store.save_answer(
+        await store.attempts.save_answer(
             workspace_id_1,
             chat_quiz_id,
             chat_attempt_id,
             UUID(chat_quiz["questions"][0]["id"]),
             "Mean",
         )
-        await store.submit_attempt(workspace_id_1, chat_quiz_id, chat_attempt_id)
-        assert (await store.get_attempt(workspace_id_1, chat_quiz_id, chat_attempt_id))[
+        await store.attempts.submit_attempt(workspace_id_1, chat_quiz_id, chat_attempt_id)
+        assert (await store.attempts.get_attempt(workspace_id_1, chat_quiz_id, chat_attempt_id))[
             "weak_topics"
         ] == ["robust statistics"]
         for key, request, kind in [
@@ -535,7 +539,7 @@ async def verify() -> None:
                 # The review stays the message result; the practice Quiz is the run's output.
                 outputs = (await runs.get(workspace_id_1, UUID(created_task["run_id"])))["outputs"]
                 assert outputs[-1]["kind"] == "quiz"
-                assert (await store.get_quiz(workspace_id_1, UUID(outputs[-1]["quiz_id"])))[
+                assert (await store.quizzes.get_quiz(workspace_id_1, UUID(outputs[-1]["quiz_id"])))[
                     "config"
                 ]["topic"] == "robust statistics"
         await expect_error(
@@ -613,8 +617,10 @@ async def verify() -> None:
             "IDEMPOTENCY_CONFLICT",
         )
         await processor.process_quiz()
-        assert (await store.get_quiz(workspace_id_1, agent_quiz_id))["status"] == "ready"
-        await expect_error(store.get_quiz(workspace_id_2, agent_quiz_id), "RESOURCE_NOT_FOUND")
+        assert (await store.quizzes.get_quiz(workspace_id_1, agent_quiz_id))["status"] == "ready"
+        await expect_error(
+            store.quizzes.get_quiz(workspace_id_2, agent_quiz_id), "RESOURCE_NOT_FOUND"
+        )
         async with sessions() as session:
             generated = await session.scalar(select(Quiz).where(Quiz.public_id == agent_quiz_id))
             assert generated is not None and generated.generation_usage is not None
@@ -622,7 +628,7 @@ async def verify() -> None:
             # Topic retrieval is application code; the model is called once to generate.
             assert generated.generation_usage["model_calls"] == 1
             assert "outliers" not in str(generated.generation_usage)
-        assert "generation_usage" not in await store.get_quiz(workspace_id_1, agent_quiz_id)
+        assert "generation_usage" not in await store.quizzes.get_quiz(workspace_id_1, agent_quiz_id)
         print("PASS: opt-in Quiz planning, private audit, scope isolation and mode idempotency")
 
         concurrent = await asyncio.gather(
@@ -707,19 +713,21 @@ async def verify() -> None:
             )
         print("PASS: conversation reservations and standalone Quiz share the workspace quota")
 
-        interrupted = await store.start_attempt(workspace_id_1, quiz_id, "attempt-interrupted")
+        interrupted = await store.attempts.start_attempt(
+            workspace_id_1, quiz_id, "attempt-interrupted"
+        )
         interrupted_id = UUID(interrupted["id"])
-        await store.save_answer(
+        await store.attempts.save_answer(
             workspace_id_1,
             quiz_id,
             interrupted_id,
             UUID(questions[1]["id"]),
             "The median is stable against extreme values.",
         )
-        assert (await store.submit_attempt(workspace_id_1, quiz_id, interrupted_id))[
+        assert (await store.attempts.submit_attempt(workspace_id_1, quiz_id, interrupted_id))[
             "status"
         ] == "grading"
-        claimed = await store.claim_grading()
+        claimed = await store.attempts.claim_grading()
         assert claimed is not None and claimed[0] == interrupted_id
         async with sessions.begin() as session:
             await session.execute(
@@ -727,15 +735,15 @@ async def verify() -> None:
                 .where(QuizAttempt.public_id == interrupted_id)
                 .values(lease_until=datetime.now(UTC) - timedelta(seconds=1))
             )
-        assert await store.claim_grading() is None
-        assert (await store.get_attempt(workspace_id_1, quiz_id, interrupted_id))[
+        assert await store.attempts.claim_grading() is None
+        assert (await store.attempts.get_attempt(workspace_id_1, quiz_id, interrupted_id))[
             "status"
         ] == "failed"
-        assert (await store.retry_grading(workspace_id_1, quiz_id, interrupted_id))[
+        assert (await store.attempts.retry_grading(workspace_id_1, quiz_id, interrupted_id))[
             "status"
         ] == "grading"
         await processor.process_grading()
-        assert (await store.get_attempt(workspace_id_1, quiz_id, interrupted_id))[
+        assert (await store.attempts.get_attempt(workspace_id_1, quiz_id, interrupted_id))[
             "status"
         ] == "submitted"
         print("PASS: expired grading stays failed until explicit retry")

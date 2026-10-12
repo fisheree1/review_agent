@@ -86,7 +86,7 @@ class LearningService:
             raise ApplicationError(
                 code="QUIZ_INVALID", message="出题设置无效", status_code=422
             ) from exc
-        return await self.store.create_quiz(
+        return await self.store.quizzes.create_quiz(
             workspace, key, title, blueprint, documents, collections
         )
 
@@ -100,7 +100,7 @@ class LearningProcessor:
         self.model = model
 
     async def process_quiz(self) -> bool:
-        task = await self.store.claim_quiz()
+        task = await self.store.quizzes.claim_quiz()
         if task is None:
             return False
         public_id, fence, _workspace, config, _scope = task
@@ -108,10 +108,10 @@ class LearningProcessor:
             async with asyncio.timeout(110):
 
                 async def sources(vector: list[float] | None, topic: str) -> list[Evidence]:
-                    return await self.store.quiz_evidence(public_id, fence, vector, topic)
+                    return await self.store.quizzes.quiz_evidence(public_id, fence, vector, topic)
 
                 async def ensure_active() -> None:
-                    await self.store.ensure_quiz_active(public_id, fence)
+                    await self.store.quizzes.ensure_quiz_active(public_id, fence)
 
                 # Standard and agent modes share one evidence selection and one generation.
                 questions, usage = await generate_scoped_quiz(
@@ -122,32 +122,32 @@ class LearningProcessor:
                     ensure_active=ensure_active,
                     charge_usage=config.get("generation_mode") == "agent",
                 )
-                await self.store.finish_quiz(public_id, fence, questions, usage)
+                await self.store.quizzes.finish_quiz(public_id, fence, questions, usage)
         except RagFailure as exc:
-            await self.store.fail_quiz(public_id, fence, exc.code)
+            await self.store.quizzes.fail_quiz(public_id, fence, exc.code)
         except TimeoutError:
-            await self.store.fail_quiz(public_id, fence, "PROVIDER_TIMEOUT")
+            await self.store.quizzes.fail_quiz(public_id, fence, "PROVIDER_TIMEOUT")
         except Exception as exc:
             logger.error(
                 "quiz_generation_failed id=%s error_type=%s", public_id, type(exc).__name__
             )
-            await self.store.fail_quiz(public_id, fence, "QUIZ_FAILED")
+            await self.store.quizzes.fail_quiz(public_id, fence, "QUIZ_FAILED")
         return True
 
     async def process_grading(self) -> bool:
-        task = await self.store.claim_grading()
+        task = await self.store.attempts.claim_grading()
         if task is None:
             return False
         public_id, fence, items = task
         try:
             async with asyncio.timeout(110):
                 grades = await self.model.grade_short(items)
-                await self.store.finish_grading(public_id, fence, grades)
+                await self.store.attempts.finish_grading(public_id, fence, grades)
         except RagFailure as exc:
-            await self.store.fail_grading(public_id, fence, exc.code)
+            await self.store.attempts.fail_grading(public_id, fence, exc.code)
         except TimeoutError:
-            await self.store.fail_grading(public_id, fence, "PROVIDER_TIMEOUT")
+            await self.store.attempts.fail_grading(public_id, fence, "PROVIDER_TIMEOUT")
         except Exception as exc:
             logger.error("quiz_grading_failed id=%s error_type=%s", public_id, type(exc).__name__)
-            await self.store.fail_grading(public_id, fence, "GRADING_FAILED")
+            await self.store.attempts.fail_grading(public_id, fence, "GRADING_FAILED")
         return True

@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { cancelAgentRun, getAgentRun, respondAgentRun } from "../api/learning";
 import { apiUrl } from "../api/client";
+import { useRunEvents } from "../hooks/useRunEvents";
 import { ErrorState } from "./ErrorState";
 import { QuizAttemptPanel } from "./QuizAttemptPanel";
 
@@ -19,14 +20,20 @@ export function AgentRunCard({ runId, conversationId }: { runId: string; convers
   const cache = useQueryClient();
   const [answer, setAnswer] = useState("");
   const responseKey = useRef<{ answer: string; key: string } | null>(null);
+  const [streamable, setStreamable] = useState(true);
+  const live = useRunEvents(runId, streamable);
   const run = useQuery({
     queryKey: ["agent-run", runId], queryFn: () => getAgentRun(runId),
     refetchInterval: (query) => {
       const value = query.state.data;
       if (value && (terminal.has(value.status) || value.status === "blocked")) return false;
+      // Pushed progress makes polling a slow safety net; without a stream, poll as before.
+      if (live) return 30_000;
       return value?.status === "waiting_input" ? 5000 : 1500;
     },
   });
+  const closed = run.data ? terminal.has(run.data.status) || run.data.status === "blocked" : false;
+  useEffect(() => setStreamable(!closed), [closed]);
   useEffect(() => {
     if (run.data) void cache.invalidateQueries({ queryKey: ["conversation", conversationId] });
   }, [cache, conversationId, run.data?.revision]);

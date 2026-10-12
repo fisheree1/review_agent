@@ -31,6 +31,7 @@ from app.learning.overview import (
     select_overview_chunks,
 )
 from app.learning.pdf_export import PDF_EXPORT_VERSION
+from app.learning.quiz_store import check_quiz_capacity
 from app.learning.run_flow import (
     PDF,
     REVIEW,
@@ -42,8 +43,14 @@ from app.learning.run_flow import (
     stage_reservation,
 )
 from app.learning.run_models import AgentRun, AgentStageExecution
-from app.learning.scope import missing, quiz_evidence, retrieve_sources, snapshot_ready
-from app.learning.store import LEASE_SECONDS, SqlLearningStore
+from app.learning.scope import (
+    LEASE_SECONDS,
+    missing,
+    quiz_evidence,
+    retrieve_sources,
+    snapshot_ready,
+)
+from app.learning.store import SqlLearningStore
 from app.learning.workflow import (
     MAX_RUN_CALLS,
     MAX_RUN_COST_UNITS,
@@ -222,7 +229,12 @@ class SqlAgentRunStore:
             run.status, run.revision = "queued", run.revision + 1
             return run_view(run)
 
-    async def claim(self) -> dict[str, Any] | None:
+    async def sweep(self) -> bool:
+        """Close expired runs and requeue runs whose lease lapsed; run periodically, not per claim.
+
+        Returns whether any run changed. A lapsed lease with an unconfirmed external call blocks
+        the run instead of requeueing it, so an unknown billed request is never repeated.
+        """
         async with self.sessions.begin() as session:
             now = datetime.now(UTC)
             expired = (
@@ -271,6 +283,11 @@ class SqlAgentRunStore:
                     reservation = stale_run.quiz_reserved
                     self._close(stale_run, "queued")
                     stale_run.quiz_reserved = reservation
+            return bool(expired or stale)
+
+    async def claim(self) -> dict[str, Any] | None:
+        async with self.sessions.begin() as session:
+            now = datetime.now(UTC)
             # Conversation row is the per-conversation scheduler lock, shared with ask().
             candidates = (
                 await session.scalars(
@@ -617,7 +634,7 @@ class SqlAgentRunStore:
     async def finish_grading(
         self, public_id: UUID, fence: UUID, grades: list[dict[str, Any]]
     ) -> None:
-        await self.learning.finish_grading(public_id, fence, grades)
+        await self.learning.attempts.finish_grading(public_id, fence, grades)
 
     async def record_answer_validation(
         self, public_id: UUID, fence: UUID, attempt: int, diagnosis: dict[str, Any]
@@ -698,7 +715,7 @@ class SqlAgentRunStore:
         async with self.sessions.begin() as session:
             run = await self._active(session, public_id, fence)
             if not run.quiz_reserved:
-                await self.learning._check_quiz_capacity(session, run.workspace_id)
+                await check_quiz_capacity(session, run.workspace_id)
                 run.quiz_reserved = True
 
     async def publish_summary(

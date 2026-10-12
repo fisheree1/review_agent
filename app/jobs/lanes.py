@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
 
@@ -38,6 +39,23 @@ class Lane:
     name: str
     steps: tuple[NamedStep, ...]
     concurrency: int = 1
+
+
+def throttled(step: Step, *, seconds: float, clock: Callable[[], float] = time.monotonic) -> Step:
+    """Run ``step`` at most once per interval; skipped polls report no work."""
+    next_run = 0.0
+
+    async def run() -> bool:
+        nonlocal next_run
+        now = clock()
+        if now < next_run:
+            return False
+        next_run = now + seconds
+        await step()
+        # Maintenance never counts as work, so it cannot keep a lane polling without pause.
+        return False
+
+    return run
 
 
 def parse_lane_names(value: str) -> tuple[str, ...]:

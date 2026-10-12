@@ -82,3 +82,33 @@ test("an overview batch shows recoverable progress while still working", async (
   expect(await screen.findByText("正在分批整理资料")).toBeVisible();
   expect(screen.getByText("已完成 1 / 8 批")).toBeVisible();
 });
+
+class FakeEventSource {
+  static instances: FakeEventSource[] = [];
+  listeners: Record<string, ((event: MessageEvent<string>) => void)[]> = {};
+  closed = false;
+  constructor(public url: string, public init?: EventSourceInit) { FakeEventSource.instances.push(this); }
+  addEventListener(type: string, listener: (event: MessageEvent<string>) => void) { (this.listeners[type] ??= []).push(listener); }
+  emit(type: string, data?: unknown) { this.listeners[type]?.forEach((listener) => listener({ data: JSON.stringify(data) } as MessageEvent<string>)); }
+  close() { this.closed = true; }
+}
+
+test("pushed progress updates the run without waiting for polling and closes when the run ends", async () => {
+  FakeEventSource.instances = [];
+  vi.stubGlobal("EventSource", FakeEventSource);
+  try {
+    show({ ...fixture, status: "running", stage: "summary", outputs: [] });
+    expect(await screen.findByText("正在总结资料")).toBeVisible();
+    const source = FakeEventSource.instances[0];
+    expect(source.url).toContain("/api/v1/agent-runs/run/events");
+    expect(source.init?.withCredentials).toBe(true);
+    source.emit("open");
+    source.emit("run", { ...fixture, status: "running", stage: "quiz", revision: 4, outputs: [] });
+    expect(await screen.findByText("正在生成练习")).toBeVisible();
+    expect(learning.getAgentRun).toHaveBeenCalledTimes(1);
+    source.emit("run", { ...fixture, status: "completed", stage: "done", revision: 5 });
+    await waitFor(() => expect(source.closed).toBe(true));
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});
