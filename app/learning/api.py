@@ -16,7 +16,7 @@ from app.learning.application import LearningService
 from app.learning.pdf_export import render_study_pdf
 from app.learning.run_store import SqlAgentRunStore
 from app.learning.store import SqlLearningStore
-from app.rag.api import ClaimResponse
+from app.rag.api import AnswerResponse, ClaimResponse
 
 router = APIRouter(prefix="/api/v1", tags=["learning"])
 
@@ -27,7 +27,6 @@ def get_learning_service() -> LearningService:
         SqlLearningStore(
             async_session_factory,
             RagSettings().profile,
-            graph_enabled=settings.agent_graph_enabled,
             wait_days=settings.agent_wait_days,
         )
     )
@@ -86,15 +85,9 @@ class TaskResultResponse(BaseModel):
     title: str | None = None
 
 
-class StudyClaimResponse(ClaimResponse):
-    title: str | None = None
-    explanation: str | None = None
-
-
-class StudyAnswerResponse(BaseModel):
-    insufficient_evidence: bool
-    claims: list[StudyClaimResponse]
-    explanation: str | None = None
+# Conversation and reader answers share one validated, per-point answer contract.
+StudyClaimResponse = ClaimResponse
+StudyAnswerResponse = AnswerResponse
 
 
 class MessageResponse(BaseModel):

@@ -28,7 +28,6 @@ from app.learning.scope import (
     missing,
     quiz_evidence,
     resolve_scope,
-    retrieve_sources,
     snapshot_ready,
     workspace_id,
 )
@@ -102,12 +101,10 @@ class SqlLearningStore:
         sessions: async_sessionmaker[AsyncSession],
         profile: str,
         *,
-        graph_enabled: bool = False,
         wait_days: int = 7,
     ) -> None:
         self.sessions = sessions
         self.profile = profile
-        self.graph_enabled = graph_enabled
         self.wait_days = wait_days
 
     async def _workspace(self, session: AsyncSession, public_id: UUID) -> int:
@@ -545,20 +542,19 @@ class SqlLearningStore:
             )
             session.add(message)
             await session.flush()
-            if self.graph_enabled:
-                run = AgentRun(
-                    workspace_id=workspace,
-                    conversation_id=item.id,
-                    message_id=message.id,
-                    graph_version=GRAPH_VERSION,
-                    profile=self.profile,
-                    scope=item.scope,
-                    expires_at=datetime.now(UTC) + timedelta(days=self.wait_days),
-                )
-                session.add(run)
-                await session.flush()
-                return {**message_view(message), "run_id": str(run.public_id)}
-            return message_view(message)
+            # Every message is executed as a durable run; there is no direct message worker.
+            run = AgentRun(
+                workspace_id=workspace,
+                conversation_id=item.id,
+                message_id=message.id,
+                graph_version=GRAPH_VERSION,
+                profile=self.profile,
+                scope=item.scope,
+                expires_at=datetime.now(UTC) + timedelta(days=self.wait_days),
+            )
+            session.add(run)
+            await session.flush()
+            return {**message_view(message), "run_id": str(run.public_id)}
 
     async def cancel_message(
         self, principal: UUID, conversation_id: UUID, message_id: UUID
@@ -686,122 +682,6 @@ class SqlLearningStore:
             )
             return {"rating": rating}
 
-    async def claim_message(
-        self,
-    ) -> tuple[UUID, UUID, int, str, ScopeSnapshot, list[dict[str, str]]] | None:
-        async with self.sessions.begin() as session:
-            now = datetime.now(UTC)
-            await session.execute(
-                update(ConversationMessage)
-                .where(
-                    ConversationMessage.status == "processing",
-                    ConversationMessage.lease_until < now,
-                    ~exists().where(AgentRun.message_id == ConversationMessage.id),
-                )
-                .values(status="failed", fence=None, failure_code="WORKER_INTERRUPTED")
-            )
-            message = await session.scalar(
-                select(ConversationMessage)
-                .where(
-                    ConversationMessage.status == "queued",
-                    ConversationMessage.profile == self.profile,
-                    ~exists().where(AgentRun.message_id == ConversationMessage.id),
-                )
-                .order_by(ConversationMessage.created_at)
-                .with_for_update(skip_locked=True)
-                .limit(1)
-            )
-            if message is None:
-                return None
-            if not await snapshot_ready(
-                session, message.workspace_id, message.scope, message.profile
-            ):
-                message.status = "failed"
-                message.failure_code = "SCOPE_NOT_READY"
-                return None
-            message.status = "processing"
-            message.fence = uuid4()
-            message.lease_until = now + timedelta(seconds=LEASE_SECONDS)
-            previous = (
-                await session.scalars(
-                    select(ConversationMessage)
-                    .where(
-                        ConversationMessage.workspace_id == message.workspace_id,
-                        ConversationMessage.conversation_id == message.conversation_id,
-                        ConversationMessage.id < message.id,
-                        ConversationMessage.status == "answered",
-                    )
-                    .order_by(ConversationMessage.id.desc())
-                    .limit(10)
-                )
-            ).all()
-            history = [
-                {
-                    "question": item.question,
-                    "answer": (
-                        " ".join(claim["text"] for claim in item.answer.get("claims", []))
-                        if item.answer
-                        else (item.task_result or {}).get("text", "")
-                    )[:600],
-                }
-                for item in reversed(previous)
-                if item.scope == message.scope and (item.answer or item.task_result)
-            ]
-            return (
-                message.public_id,
-                message.fence,
-                message.workspace_id,
-                message.question,
-                message.scope,
-                history[-3:],
-            )
-
-    async def _active_message(
-        self, session: AsyncSession, public_id: UUID, fence: UUID
-    ) -> ConversationMessage | None:
-        message = await session.scalar(
-            select(ConversationMessage)
-            .where(
-                ConversationMessage.public_id == public_id,
-                ConversationMessage.fence == fence,
-                ConversationMessage.status == "processing",
-                ConversationMessage.lease_until > datetime.now(UTC),
-            )
-            .with_for_update()
-        )
-        if message is None or not await snapshot_ready(
-            session, message.workspace_id, message.scope, message.profile
-        ):
-            return None
-        return message
-
-    async def message_sources(
-        self, public_id: UUID, fence: UUID, vector: list[float], query_text: str
-    ) -> list[Evidence]:
-        async with self.sessions.begin() as session:
-            message = await self._active_message(session, public_id, fence)
-            if message is None:
-                return []
-            return await retrieve_sources(
-                session, message.workspace_id, message.scope, message.profile, vector, query_text
-            )
-
-    async def message_quiz_sources(
-        self, public_id: UUID, fence: UUID, topic_vector: list[float] | None, topic: str
-    ) -> list[Evidence]:
-        async with self.sessions.begin() as session:
-            message = await self._active_message(session, public_id, fence)
-            if message is None:
-                return []
-            return await quiz_evidence(
-                session, message.workspace_id, message.scope, message.profile, topic_vector, topic
-            )
-
-    async def ensure_message_active(self, public_id: UUID, fence: UUID) -> None:
-        async with self.sessions.begin() as session:
-            if await self._active_message(session, public_id, fence) is None:
-                raise RagFailure("AGENT_RUN_INACTIVE", "消息已停止或资料范围不可用")
-
     async def _check_quiz_capacity(self, session: AsyncSession, workspace: int) -> None:
         await session.scalar(
             select(WorkspaceModel.id).where(WorkspaceModel.id == workspace).with_for_update()
@@ -833,194 +713,6 @@ class SqlLearningStore:
             raise ApplicationError(
                 code="QUIZ_LIMIT", message="出题过于频繁，请稍后重试", status_code=429
             )
-
-    async def prepare_message_quiz(self, public_id: UUID, fence: UUID, title: str) -> None:
-        async with self.sessions.begin() as session:
-            message = await self._active_message(session, public_id, fence)
-            if message is None:
-                raise RagFailure("AGENT_RUN_INACTIVE", "任务已停止")
-            if message.task_result is None:
-                try:
-                    await self._check_quiz_capacity(session, message.workspace_id)
-                except ApplicationError as exc:
-                    raise RagFailure(exc.code, exc.message) from exc
-                message.task_result = {
-                    "kind": "quiz",
-                    "title": title,
-                    "text": "正在检索依据并生成练习。",
-                }
-
-    async def finish_message_task(
-        self, public_id: UUID, fence: UUID, result: dict[str, Any], usage: dict[str, Any]
-    ) -> None:
-        async with self.sessions.begin() as session:
-            message = await self._active_message(session, public_id, fence)
-            if message is not None:
-                if result.get("quiz_id"):
-                    quiz = await session.scalar(
-                        select(Quiz).where(
-                            Quiz.workspace_id == message.workspace_id,
-                            Quiz.public_id == UUID(result["quiz_id"]),
-                            Quiz.scope == message.scope,
-                        )
-                    )
-                    if quiz is None:
-                        raise RagFailure("AGENT_RUN_INACTIVE", "复习来源不可用")
-                    message.quiz_id = quiz.id
-                message.task_result = result
-                message.usage = usage
-                message.status = "answered"
-                message.fence = None
-                message.lease_until = None
-
-    async def finish_message_quiz(
-        self,
-        public_id: UUID,
-        fence: UUID,
-        title: str,
-        config: dict[str, Any],
-        questions: list[dict[str, Any]],
-        usage: dict[str, Any],
-    ) -> None:
-        async with self.sessions.begin() as session:
-            message = await self._active_message(session, public_id, fence)
-            if message is None:
-                return
-            quiz = Quiz(
-                workspace_id=message.workspace_id,
-                idempotency_key=f"agent-message:{public_id}",
-                title=title,
-                config=config,
-                requested_scope={
-                    "document_ids": sorted(item["document_id"] for item in message.scope),
-                    "collection_ids": [],
-                },
-                scope=message.scope,
-                profile=message.profile,
-                status="ready",
-                generation_usage=usage,
-            )
-            session.add(quiz)
-            await session.flush()
-            session.add_all(
-                QuizDocument(
-                    workspace_id=message.workspace_id,
-                    quiz_id=quiz.id,
-                    document_version_id=item["version_id"],
-                )
-                for item in message.scope
-            )
-            session.add_all(
-                QuizQuestion(
-                    workspace_id=message.workspace_id,
-                    quiz_id=quiz.id,
-                    ordinal=ordinal,
-                    **question,
-                )
-                for ordinal, question in enumerate(questions, start=1)
-            )
-            message.quiz_id = quiz.id
-            message.task_result = {
-                "kind": "quiz",
-                "quiz_id": str(quiz.public_id),
-                "title": title,
-                "text": f"已生成 {len(questions)} 题，可在这里作答；未通过校验的题目不会发布。",
-            }
-            message.usage = usage
-            message.status = "answered"
-            message.fence = None
-            message.lease_until = None
-
-    async def message_review_context(self, public_id: UUID, fence: UUID) -> dict[str, Any] | None:
-        async with self.sessions.begin() as session:
-            message = await self._active_message(session, public_id, fence)
-            if message is None:
-                raise RagFailure("AGENT_RUN_INACTIVE", "任务已停止")
-            row = (
-                await session.execute(
-                    select(Quiz, QuizAttempt)
-                    .join(
-                        QuizAttempt,
-                        and_(
-                            QuizAttempt.quiz_id == Quiz.id,
-                            QuizAttempt.workspace_id == Quiz.workspace_id,
-                        ),
-                    )
-                    .where(
-                        Quiz.workspace_id == message.workspace_id,
-                        Quiz.scope == message.scope,
-                        QuizAttempt.workspace_id == message.workspace_id,
-                        QuizAttempt.status == "submitted",
-                    )
-                    .order_by(QuizAttempt.submitted_at.desc(), QuizAttempt.id.desc())
-                    .limit(1)
-                )
-            ).first()
-            if row is None:
-                return None
-            quiz, attempt = row
-            wrong = (
-                await session.execute(
-                    select(QuizQuestion, QuizAnswer)
-                    .outerjoin(
-                        QuizAnswer,
-                        and_(
-                            QuizAnswer.question_id == QuizQuestion.id,
-                            QuizAnswer.workspace_id == message.workspace_id,
-                            QuizAnswer.attempt_id == attempt.id,
-                        ),
-                    )
-                    .where(
-                        QuizQuestion.workspace_id == message.workspace_id,
-                        QuizQuestion.quiz_id == quiz.id,
-                        func.coalesce(QuizAnswer.score, 0) < 0.7,
-                    )
-                    .order_by(QuizQuestion.ordinal)
-                    .limit(3)
-                )
-            ).all()
-            summary = "\n".join(
-                f"第 {question.ordinal} 题：{question.stem[:240]}；"
-                f"你的答案：{str(answer.response)[:120] if answer else '未作答'}；"
-                f"参考答案：{str(question.answer)[:120]}；解析：{question.explanation[:400]}"
-                for question, answer in wrong
-            )[:1800]
-            return {
-                "quiz_id": str(quiz.public_id),
-                "attempt_id": str(attempt.public_id),
-                "title": quiz.title,
-                "weak_topics": attempt.weak_topics or [],
-                "summary": summary,
-            }
-
-    async def finish_message(
-        self, public_id: UUID, fence: UUID, answer: dict[str, Any], usage: dict[str, Any]
-    ) -> None:
-        async with self.sessions.begin() as session:
-            message = await self._active_message(session, public_id, fence)
-            if message is not None:
-                message.answer = answer
-                message.usage = usage
-                message.status = "insufficient" if answer["insufficient_evidence"] else "answered"
-                message.fence = None
-                message.lease_until = None
-
-    async def fail_message(self, public_id: UUID, fence: UUID, code: str) -> None:
-        async with self.sessions.begin() as session:
-            message = await session.scalar(
-                select(ConversationMessage)
-                .where(
-                    ConversationMessage.public_id == public_id,
-                    ConversationMessage.fence == fence,
-                    ConversationMessage.status == "processing",
-                )
-                .with_for_update()
-            )
-            if message is not None:
-                message.status = "failed"
-                message.failure_code = code
-                message.fence = None
-                message.lease_until = None
 
     async def create_quiz(
         self,

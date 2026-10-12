@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol
 
@@ -10,6 +9,7 @@ from app.rag.domain import (
     Evidence,
     RagFailure,
 )
+from app.rag.ports import RunCheck, SourceSearch
 
 AGENT_VERSION = "scoped-study-tools-v1"
 MAX_MODEL_CALLS = 7
@@ -78,5 +78,13 @@ class AgentBudget:
         }
 
 
-SourceSearch = Callable[[list[float], str], Awaitable[list[Evidence]]]
-RunCheck = Callable[[], Awaitable[None]]
+__all__ = [
+    "AGENT_VERSION",
+    "MAX_BILLABLE_TOKENS",
+    "MAX_COST_UNITS",
+    "MAX_MODEL_CALLS",
+    "AgentBudget",
+    "RunCheck",
+    "SourceSearch",
+    "StudyGenerationModel",
+]

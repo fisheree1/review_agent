@@ -74,12 +74,14 @@ export function QuestionPanel({ documentId, filename, onCitation }: Props) {
             {item.status === "insufficient" ? <p>在所选资料中没有找到足够依据。请补充相关资料，或把问题问得更具体。</p> : null}
             {item.answer?.claims.map((claim, claimIndex) => (
               <div className="answer-claim" key={claimIndex}>
+                {claim.title ? <h4>{claimIndex + 1}. {claim.title}</h4> : null}
                 <p>{claim.text}</p>
+                {claim.explanation ? <p className="answer-claim__explanation">{claim.explanation}</p> : null}
                 {claim.citations.map((citation, citationIndex) => <button className="citation-link" key={`${citation.source_id}-${citationIndex}`} onClick={() => onCitation(citation)} type="button" aria-label={`查看引用：${citationLabel(citation.locator)}`}>[{claimIndex + 1}.{citationIndex + 1}] {citationLabel(citation.locator)}</button>)}
               </div>
             ))}
             {item.status === "answered" ? <button className="button button--secondary" type="button" onClick={() => {
-              const text = item.answer?.claims.map((claim) => `${claim.text}\n${claim.citations.map((c) => `${citationLabel(c.locator)}：${c.quote}`).join("\n")}`).join("\n\n") ?? "";
+              const text = item.answer?.claims.map((claim) => [claim.title, claim.text, claim.explanation, ...claim.citations.map((c) => `${citationLabel(c.locator)}：${c.quote}`)].filter(Boolean).join("\n")).join("\n\n") ?? "";
               void navigator.clipboard.writeText(text).then(() => setCopyMessage("已复制回答及来源"), () => setCopyMessage("无法复制，请手动选择文字"));
             }}>复制回答与引用</button> : null}
           </article>

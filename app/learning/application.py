@@ -6,10 +6,9 @@ from typing import Any, Protocol
 from uuid import UUID
 
 from app.core.errors import ApplicationError
-from app.learning.agent import AgentBudget, StudyGenerationModel
-from app.learning.conversation_tasks import TASK_VERSION, TaskPlanningModel, validate_task_plan
+from app.learning.agent import StudyGenerationModel
+from app.learning.conversation_tasks import TaskPlanningModel
 from app.learning.domain import validate_blueprint
-from app.learning.focused_answer import answer_focused
 from app.learning.quiz_generation import QuizGenerationModel, generate_scoped_quiz
 from app.learning.store import SqlLearningStore
 from app.rag.domain import Evidence, RagFailure
@@ -99,137 +98,6 @@ class LearningProcessor:
         self.store = store
         self.embeddings = embeddings
         self.model = model
-
-    async def process_message(self) -> bool:
-        task = await self.store.claim_message()
-        if task is None:
-            return False
-        public_id, fence, _workspace, question, _scope, history = task
-        try:
-            async with asyncio.timeout(110):
-
-                async def search(vector: list[float], query: str) -> list[Evidence]:
-                    return await self.store.message_sources(public_id, fence, vector, query)
-
-                async def ensure_active() -> None:
-                    await self.store.ensure_message_active(public_id, fence)
-
-                await ensure_active()
-                review = await self.store.message_review_context(public_id, fence)
-                budget = AgentBudget()
-                payload, routing_usage = await self.model.plan_task(
-                    question,
-                    history=history,
-                    review_available=review is not None,
-                )
-                budget.charge(routing_usage)
-                plan = validate_task_plan(payload)
-                await ensure_active()
-
-                def task_usage(usage: dict[str, Any]) -> dict[str, Any]:
-                    return {
-                        **usage,
-                        "task_version": TASK_VERSION,
-                        "task_action": plan.action,
-                        "task_prompt_version": routing_usage.get("prompt_version"),
-                    }
-
-                if plan.action == "answer":
-                    answer_history = history
-                    if review and review["summary"]:
-                        answer_history = [
-                            *history[-2:],
-                            {"question": "最近提交练习的错题", "answer": review["summary"]},
-                        ]
-                    answer, usage = await answer_focused(
-                        question,
-                        answer_history,
-                        embeddings=self.embeddings,
-                        model=self.model,
-                        search=search,
-                        ensure_active=ensure_active,
-                        budget=budget,
-                    )
-                    await self.store.finish_message(public_id, fence, answer, task_usage(usage))
-                elif plan.action in ("create_quiz", "practice_weak_topics") and (
-                    plan.action == "create_quiz" or (review and review["weak_topics"])
-                ):
-                    config = plan.quiz_config(review["weak_topics"] if review else None)
-                    title = plan.title or "学习练习"
-                    await self.store.prepare_message_quiz(public_id, fence, title)
-
-                    async def quiz_sources(
-                        vector: list[float] | None, topic: str
-                    ) -> list[Evidence]:
-                        return await self.store.message_quiz_sources(
-                            public_id, fence, vector, topic
-                        )
-
-                    questions, usage = await generate_scoped_quiz(
-                        config,
-                        embeddings=self.embeddings,
-                        model=self.model,
-                        sources=quiz_sources,
-                        ensure_active=ensure_active,
-                        budget=budget,
-                    )
-                    await self.store.finish_message_quiz(
-                        public_id,
-                        fence,
-                        title,
-                        config,
-                        questions,
-                        task_usage(usage),
-                    )
-                else:
-                    if plan.action == "study":
-                        result = {
-                            "kind": "clarification",
-                            "text": "完整学习工作流尚未开启，请分别发送总结、出题与复习任务。",
-                        }
-                    elif plan.action == "review_mistakes" and review:
-                        result = {
-                            "kind": "review",
-                            "quiz_id": review["quiz_id"],
-                            "attempt_id": review["attempt_id"],
-                            "title": review["title"],
-                            "text": "以下是当前资料范围最近一次练习的作答、解析与来源。",
-                        }
-                    else:
-                        text = (
-                            plan.message
-                            if plan.action == "clarify"
-                            else (
-                                "当前资料范围还没有已完成的练习，请先要求生成 Quiz 并提交作答。"
-                                if review is None
-                                else "最近一次练习没有明显薄弱点，可以要求生成新练习。"
-                            )
-                        )
-                        result = {
-                            "kind": "clarification",
-                            "text": text or "请说明希望完成的学习任务。",
-                        }
-                    usage = budget.usage(
-                        routing_usage,
-                        steps=1,
-                        searches=0,
-                        reads=0,
-                        planning_prompt_version=routing_usage.get("prompt_version"),
-                        trace=[{"tool": "plan_task", "action": plan.action}],
-                    )
-                    await self.store.finish_message_task(
-                        public_id, fence, result, task_usage(usage)
-                    )
-        except RagFailure as exc:
-            await self.store.fail_message(public_id, fence, exc.code)
-        except TimeoutError:
-            await self.store.fail_message(public_id, fence, "PROVIDER_TIMEOUT")
-        except Exception as exc:
-            logger.error(
-                "conversation_message_failed id=%s error_type=%s", public_id, type(exc).__name__
-            )
-            await self.store.fail_message(public_id, fence, "ANSWER_FAILED")
-        return True
 
     async def process_quiz(self) -> bool:
         task = await self.store.claim_quiz()

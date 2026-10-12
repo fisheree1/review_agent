@@ -132,9 +132,9 @@ docker compose --env-file /etc/review-agent/production.env \
 
 ## Agent 工作流部署与回滚
 
-开发环境默认 `AGENT_GRAPH_ENABLED=true`；生产 Compose 默认 `false`。首次部署前备份并验证恢复，使用迁移角色升级至 `0014_agent_workflows`。排空/停止旧 Worker，部署同版本 API 与 Worker 后验证就绪和隔离学习流程；不要让旧 Worker 消费新组合评分。全运行默认 7 天到期，可通过 `AGENT_WAIT_DAYS`（1–30）调整；模型追踪关闭。
+工作流不再有开关：每条对话消息都创建持久运行，旧的消息直接处理路径已删除（[ADR-0005](./adr/0005-single-execution-path.md)）。生产 env 文件中残留的 `AGENT_GRAPH_ENABLED` 会被忽略。全运行默认 7 天到期，可通过 `AGENT_WAIT_DAYS`（1–30）调整；模型追踪关闭。
 
-质量验收后显式设置 `AGENT_GRAPH_ENABLED=true` 并更新 API。开关关闭只影响新消息，兼容 Worker 必须继续运行直至已有记录完成/取消/到期。未知模型请求进入 blocked，运营检查稳定运行 ID 与错误码，不自动补发；保留用户已完成成果。生产回滚不删除 `0014` 的表/列，也不降级仍有待办运行的 Worker。正式公开前完成真实资料集、P95、货币成本和告警演练；合成样本通过不能替代这些门槛。
+升级到 `0019_legacy_messages_to_runs`：先备份并验证恢复；停止全部旧 Worker（旧 Worker 仍会直接处理消息）；用迁移角色升级，迁移把仍在排队或处理中的旧消息交给 `study-graph-v5` 运行，从规划阶段重新开始（处理中的消息若已发出模型请求，可能再计费一次）；再部署同版本 API 与 Worker，验证就绪和隔离学习流程。回滚应用前先降级 `0019`：只删除迁移创建且尚未开始的运行，消息回到旧路径。未知模型请求进入 blocked，运营检查稳定运行 ID 与错误码，不自动补发；保留用户已完成成果。正式公开前完成真实资料集、P95、货币成本和告警演练；合成样本通过不能替代这些门槛。
 
 ## 宝塔 Nginx 与现有网站共存
 

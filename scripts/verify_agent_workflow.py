@@ -65,7 +65,7 @@ async def verify() -> None:
         )
         session.add_all([owner, foreign])
         await session.flush()
-    store = SqlLearningStore(sessions, PROFILE, graph_enabled=True)
+    store = SqlLearningStore(sessions, PROFILE)
     runs = SqlAgentRunStore(store)
     model = Models()
     worker = AgentRunProcessor(runs, model, model)
@@ -159,6 +159,10 @@ async def verify() -> None:
             persisted = await session.scalar(select(AgentRun).where(AgentRun.public_id == run_id))
             # plan, summary, Quiz, grading and weak practice: one model call each.
             assert persisted is not None and persisted.usage["model_calls"] == 5
+            # Claims reserve time per stage; finished stages are charged their measured time.
+            usage = persisted.usage
+            assert usage["execution_seconds"] <= usage["observed_seconds"] + 0.01
+            assert usage["execution_seconds"] < 110
             assert (
                 await session.scalar(
                     select(func.count())

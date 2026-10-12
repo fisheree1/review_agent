@@ -430,25 +430,53 @@ def test_bilingual_quiz_prompt_requires_paired_fields_without_translating_citati
     assert "Citation quotes remain exact source substrings" in requests[0]["messages"][0]["content"]
 
 
-def test_cancelled_question_never_calls_generation_and_invalid_answer_fails() -> None:
+def test_reader_question_uses_injected_answerer_and_respects_cancellation() -> None:
     async def check() -> None:
         store = AsyncMock(spec=RagStore)
         task = Task(uuid4(), Scope(uuid4(), uuid4()), 1, uuid4(), "Question?")
         store.claim_question.return_value = task
+        answerer = AsyncMock()
+        processor = RagProcessor(store, AsyncMock(), answerer)
+
+        # Cancelled before work: the answerer (and any paid call) never runs.
         store.active.return_value = False
-        embeddings, model = AsyncMock(), AsyncMock()
-        processor = RagProcessor(store, embeddings, model)
         assert await processor.process_question()
-        embeddings.embed.assert_not_called()
-        model.answer.assert_not_called()
+        answerer.assert_not_called()
+
+        # The answerer searches only this task's scope and the result is recorded.
         store.active.return_value = True
-        embeddings.embed.return_value = [[1.0] * 1024]
         source = Evidence(uuid4(), "Some relevant source text.", 1, {})
         store.retrieve.return_value = [source]
-        model.answer.return_value = ({"insufficient_evidence": False, "claims": []}, {})
+
+        async def answer(question, *, search, ensure_active):
+            assert await search([1.0] * 1024, question) == [source]
+            await ensure_active()
+            return {"insufficient_evidence": True, "claims": []}, {"model_calls": 0}
+
+        answerer.side_effect = answer
+        await processor.process_question()
+        store.retrieve.assert_awaited_with(task, [1.0] * 1024)
+        store.finish_question.assert_awaited_once()
+
+        # Cancelled mid-answer: stop quietly without a result or a failure.
+        store.finish_question.reset_mock()
+
+        async def cancelled(question, *, search, ensure_active):
+            store.active.return_value = False
+            await ensure_active()
+            raise AssertionError("unreachable")
+
+        answerer.side_effect = cancelled
+        store.active.return_value = True
+        await processor.process_question()
+        store.finish_question.assert_not_called()
+        store.fail_question.assert_not_called()
+
+        # A received but invalid answer is a stable failure.
+        answerer.side_effect = RagFailure("ANSWER_INVALID", "invalid")
+        store.active.return_value = True
         await processor.process_question()
         store.fail_question.assert_awaited_with(task, "ANSWER_INVALID")
-        store.finish_question.assert_not_called()
 
     asyncio.run(check())
 

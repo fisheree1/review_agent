@@ -22,7 +22,11 @@ export interface Question {
   question: string;
   version: number;
   status: "queued" | "processing" | "answered" | "insufficient" | "failed" | "cancelled";
-  answer: { insufficient_evidence: boolean; claims: { text: string; citations: Citation[] }[] } | null;
+  answer: {
+    insufficient_evidence: boolean;
+    claims: { text: string; title?: string | null; explanation?: string | null; citations: Citation[] }[];
+    explanation?: string | null;
+  } | null;
   failure_message: string | null;
 }
 

@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import and_, delete, func, select, update
+from sqlalchemy import and_, delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ApplicationError
@@ -31,18 +31,27 @@ from app.learning.overview import (
     select_overview_chunks,
 )
 from app.learning.pdf_export import PDF_EXPORT_VERSION
+from app.learning.run_flow import (
+    PDF,
+    REVIEW,
+    SUMMARY,
+    WEAK,
+    RunFlow,
+    Transition,
+    run_flow,
+    stage_reservation,
+)
 from app.learning.run_models import AgentRun, AgentStageExecution
 from app.learning.scope import missing, quiz_evidence, retrieve_sources, snapshot_ready
 from app.learning.store import LEASE_SECONDS, SqlLearningStore
 from app.learning.workflow import (
-    BATCHED_GRAPH_VERSIONS,
-    COMPOSABLE_GRAPH_VERSIONS,
     MAX_RUN_CALLS,
     MAX_RUN_COST_UNITS,
     MAX_RUN_TOKENS,
     SUPPORTED_GRAPH_VERSIONS,
     TERMINAL_STATUSES,
     check_run_budget,
+    is_composable,
     run_seconds_limit,
 )
 from app.rag.domain import ANSWER_VALIDATION_REASONS, Evidence, RagFailure
@@ -314,7 +323,8 @@ class SqlAgentRunStore:
                     await self._fail_message(session, run, "RUN_SOURCE_CHANGED")
                     await self._stop_grading(session, run, "RUN_SOURCE_CHANGED")
                     continue
-                if run.usage.get("execution_seconds", 0) + 110 > run_seconds_limit(
+                reserved = stage_reservation(run.stage)
+                if run.usage.get("execution_seconds", 0) + reserved > run_seconds_limit(
                     run.graph_version
                 ):
                     self._close(run, "failed", "RUN_BUDGET_EXCEEDED")
@@ -323,7 +333,8 @@ class SqlAgentRunStore:
                     continue
                 run.usage = {
                     **run.usage,
-                    "execution_seconds": run.usage.get("execution_seconds", 0) + 110,
+                    # Reserved until the stage reports its measured duration.
+                    "execution_seconds": run.usage.get("execution_seconds", 0) + reserved,
                 }
                 run.status, run.fence = "running", uuid4()
                 run.lease_until = now + timedelta(seconds=LEASE_SECONDS)
@@ -364,8 +375,7 @@ class SqlAgentRunStore:
                 memory = conversation.memory or {}
                 memory_summary = (
                     str(memory.get("summary", ""))[:700]
-                    if run.graph_version in COMPOSABLE_GRAPH_VERSIONS
-                    and memory.get("scope") == run.scope
+                    if is_composable(run.graph_version) and memory.get("scope") == run.scope
                     else ""
                 )
                 return {
@@ -378,6 +388,7 @@ class SqlAgentRunStore:
                     "usage": run.usage,
                     "history": history,
                     "memory_summary": memory_summary,
+                    "reserved_seconds": reserved,
                 }
             return None
 
@@ -421,86 +432,6 @@ class SqlAgentRunStore:
             return await quiz_evidence(
                 session, run.workspace_id, run.scope, run.profile, topic_vector, topic
             )
-
-    async def overview_sources(
-        self, public_id: UUID, fence: UUID
-    ) -> tuple[list[Evidence], dict[str, int]]:
-        """Sample selected active versions across their entire indexed page range."""
-        async with self.sessions.begin() as session:
-            run = await self._active(session, public_id, fence)
-            per_document = max(1, 15 // len(run.scope))
-            sources: list[Evidence] = []
-            total_pages = 0
-            sampled_pages: set[tuple[int, int]] = set()
-            for item in run.scope:
-                index_id = await session.scalar(
-                    select(DocumentIndex.id)
-                    .join(
-                        DocumentModel,
-                        and_(
-                            DocumentModel.active_version_id == DocumentIndex.document_version_id,
-                            DocumentModel.workspace_id == DocumentIndex.workspace_id,
-                        ),
-                    )
-                    .where(
-                        DocumentIndex.workspace_id == run.workspace_id,
-                        DocumentIndex.document_version_id == item["version_id"],
-                        DocumentIndex.profile == run.profile,
-                        DocumentIndex.status == "ready",
-                        DocumentModel.public_id == UUID(item["document_id"]),
-                        DocumentModel.status == "ready",
-                        DocumentModel.deleted_at.is_(None),
-                    )
-                )
-                if index_id is None:
-                    raise RagFailure("RUN_SOURCE_CHANGED", "资料索引已变化")
-                page_count = await session.scalar(
-                    select(func.count(func.distinct(DocumentChunk.unit))).where(
-                        DocumentChunk.workspace_id == run.workspace_id,
-                        DocumentChunk.index_id == index_id,
-                    )
-                )
-                total_pages += page_count or 0
-                count = await session.scalar(
-                    select(func.count(DocumentChunk.id)).where(
-                        DocumentChunk.workspace_id == run.workspace_id,
-                        DocumentChunk.index_id == index_id,
-                    )
-                )
-                if not count:
-                    continue
-                sample_count = min(per_document, count)
-                offsets = sorted(
-                    {
-                        min(count - 1, (2 * index + 1) * count // (2 * sample_count))
-                        for index in range(sample_count)
-                    }
-                )
-                for offset in offsets:
-                    chunk = await session.scalar(
-                        select(DocumentChunk)
-                        .where(
-                            DocumentChunk.workspace_id == run.workspace_id,
-                            DocumentChunk.index_id == index_id,
-                        )
-                        .order_by(DocumentChunk.unit, DocumentChunk.ordinal)
-                        .offset(offset)
-                        .limit(1)
-                    )
-                    if chunk is None:
-                        continue
-                    sampled_pages.add((item["version_id"], chunk.unit))
-                    sources.append(
-                        Evidence(
-                            chunk.public_id,
-                            chunk.content,
-                            chunk.unit,
-                            {"kind": "page", "position": chunk.unit, "title": None, "path": []},
-                            document_id=UUID(item["document_id"]),
-                            version_id=item["version_id"],
-                        )
-                    )
-            return sources, {"sampled_pages": len(sampled_pages), "indexed_pages": total_pages}
 
     async def overview_batch(
         self, public_id: UUID, fence: UUID
@@ -714,14 +645,18 @@ class SqlAgentRunStore:
                 issues.append({"stage": run.stage, "attempt": attempt, **diagnosis})
                 run.usage = {**run.usage, "answer_validation": issues[-16:]}
 
-    async def _advance(self, session: AsyncSession, run: AgentRun, stage: str, status: str) -> None:
+    @staticmethod
+    def _flow(run: AgentRun) -> RunFlow:
+        return run_flow(run.plan, composable=is_composable(run.graph_version))
+
+    async def _advance(self, session: AsyncSession, run: AgentRun, step: Transition) -> None:
         await session.execute(
             update(AgentStageExecution)
             .where(AgentStageExecution.run_id == run.id, AgentStageExecution.stage == run.stage)
             .values(status="published", result=None)
         )
-        run.stage = stage
-        self._close(run, status)
+        run.stage = step.stage
+        self._close(run, step.status)
 
     async def save_plan(self, public_id: UUID, fence: UUID, plan: TaskPlan | GraphTaskPlan) -> None:
         async with self.sessions.begin() as session:
@@ -746,43 +681,18 @@ class SqlAgentRunStore:
                         "scope": run.scope,
                         "summary": plan.memory_summary,
                     }
-                if plan.clarification is not None:
-                    run.clarification = plan.clarification
-                    message.task_result = {"kind": "clarification", "text": plan.clarification}
-                    message.status = "answered"
-                    await self._advance(
-                        session,
-                        run,
-                        "clarify",
-                        "completed" if run.stage == "replan" else "waiting_input",
-                    )
-                else:
-                    await self._advance(session, run, plan.steps[0], "queued")
-                    if message.status == "answered":
-                        message.task_result, message.status = None, "queued"
-                return
-            if plan.action == "clarify":
-                run.clarification = plan.message
-                message.task_result = {"kind": "clarification", "text": plan.message}
-                message.status = "answered"
-                second = run.stage == "replan"
-                await self._advance(
-                    session, run, "clarify", "completed" if second else "waiting_input"
-                )
+                clarification = plan.clarification
             else:
-                stage = (
-                    "summary"
-                    if plan.action in ("answer", "study")
-                    else (
-                        "review"
-                        if plan.action in ("review_mistakes", "practice_weak_topics")
-                        else "quiz"
-                    )
-                )
-                await self._advance(session, run, stage, "queued")
-                if message.status == "answered":
-                    message.task_result = None
-                    message.status = "queued"
+                clarification = plan.message if plan.action == "clarify" else None
+            if clarification is not None:
+                run.clarification = clarification
+                message.task_result = {"kind": "clarification", "text": clarification}
+                message.status = "answered"
+                await self._advance(session, run, RunFlow.after_clarification(run.stage))
+                return
+            await self._advance(session, run, self._flow(run).after_plan())
+            if message.status == "answered":
+                message.task_result, message.status = None, "queued"
 
     async def reserve_quiz(self, public_id: UUID, fence: UUID) -> None:
         async with self.sessions.begin() as session:
@@ -804,8 +714,9 @@ class SqlAgentRunStore:
             check_run_budget(run.usage, run.graph_version)
             message = await session.get(ConversationMessage, run.message_id)
             assert message is not None
+            flow = self._flow(run)
             if (
-                run.graph_version in BATCHED_GRAPH_VERSIONS
+                is_composable(run.graph_version)
                 and (run.plan or {}).get("summary_mode") == "overview"
             ):
                 assert coverage is not None
@@ -830,7 +741,7 @@ class SqlAgentRunStore:
                     + 18_000
                     <= MAX_RUN_TOKENS
                     and run.usage.get("cost_units", 0) + 30_000 <= MAX_RUN_COST_UNITS
-                    and run.usage.get("execution_seconds", 0) + 110
+                    and run.usage.get("execution_seconds", 0) + stage_reservation(SUMMARY)
                     <= run_seconds_limit(run.graph_version)
                 )
                 coverage = {
@@ -857,7 +768,11 @@ class SqlAgentRunStore:
                             "coverage": coverage,
                         },
                     ]
-                    await self._advance(session, run, f"overview_{batch_index + 1}", "queued")
+                    await self._advance(
+                        session,
+                        run,
+                        flow.after_summary(insufficient=False, next_batch=batch_index + 1),
+                    )
                     return
             message.answer, message.usage = answer, usage
             message.status = "insufficient" if answer["insufficient_evidence"] else "answered"
@@ -871,29 +786,15 @@ class SqlAgentRunStore:
                     **({"coverage": coverage} if coverage else {}),
                 },
             ]
-            if run.graph_version in COMPOSABLE_GRAPH_VERSIONS:
-                steps = (run.plan or {}).get("steps", [])
-                current = steps.index("summary")
-                next_step = steps[current + 1] if current + 1 < len(steps) else "done"
-                if answer["insufficient_evidence"]:
-                    next_step = "done"
-                await self._advance(
-                    session, run, next_step, "completed" if next_step == "done" else "queued"
-                )
-                return
-            study = (run.plan or {}).get("action") == "study"
             await self._advance(
-                session,
-                run,
-                "quiz" if study else "done",
-                "queued" if study and not answer["insufficient_evidence"] else "completed",
+                session, run, flow.after_summary(insufficient=answer["insufficient_evidence"])
             )
 
     async def publish_pdf(self, public_id: UUID, fence: UUID) -> None:
         """Publish a downloadable rendering of the already validated, persisted answer."""
         async with self.sessions.begin() as session:
             run = await self._active(session, public_id, fence)
-            if run.graph_version not in COMPOSABLE_GRAPH_VERSIONS or run.stage != "pdf":
+            if not is_composable(run.graph_version) or run.stage != PDF:
                 raise RagFailure("TASK_PLAN_INVALID", "PDF 阶段不可用")
             message = await session.get(ConversationMessage, run.message_id)
             assert message is not None
@@ -908,12 +809,7 @@ class SqlAgentRunStore:
                     "text": "知识点 PDF 已准备好",
                 },
             ]
-            steps = (run.plan or {}).get("steps", [])
-            current = steps.index("pdf")
-            next_step = steps[current + 1] if current + 1 < len(steps) else "done"
-            await self._advance(
-                session, run, next_step, "completed" if next_step == "done" else "queued"
-            )
+            await self._advance(session, run, self._flow(run).after_pdf())
 
     async def publish_quiz(
         self,
@@ -980,27 +876,14 @@ class SqlAgentRunStore:
             run.outputs = [*run.outputs, output]
             message = await session.get(ConversationMessage, run.message_id)
             assert message is not None
-            if run.graph_version in COMPOSABLE_GRAPH_VERSIONS:
-                steps = (run.plan or {}).get("steps", [])
-                study = steps[0] != "quiz"
-            else:
-                study = (run.plan or {}).get("action") == "study"
-            if not study:
+            flow = self._flow(run)
+            if flow.owns_message(run.stage):
                 message.task_result, message.quiz_id, message.usage = output, quiz.id, usage
             message.status, message.fence, message.lease_until = "answered", None, None
-            # A weak-topic Quiz is the final output; never recursively schedule more practice.
-            wait = (
-                run.stage == "quiz" and "review" in (run.plan or {}).get("steps", [])
-                if run.graph_version in COMPOSABLE_GRAPH_VERSIONS
-                else study
-                and run.stage == "quiz"
-                and (run.plan or {}).get("review_after_submit", False)
-            )
-            if wait:
+            step = flow.after_quiz(run.stage)
+            if step.status == "waiting_input":
                 run.quiz_id, run.attempt_id = quiz.id, attempt.id
-            await self._advance(
-                session, run, "wait" if wait else "done", "waiting_input" if wait else "completed"
-            )
+            await self._advance(session, run, step)
 
     async def review(self, public_id: UUID, fence: UUID) -> dict[str, Any] | None:
         async with self.sessions.begin() as session:
@@ -1075,30 +958,21 @@ class SqlAgentRunStore:
                     "text": "当前资料范围还没有已完成练习，请先生成 Quiz 并提交作答。",
                 }
                 run.outputs = [*run.outputs, output]
-            if run.graph_version in COMPOSABLE_GRAPH_VERSIONS:
-                standalone = plan.get("steps", ["review"])[0] == "review"
-            else:
-                standalone = plan.get("action") != "study"
-            if standalone:
+            flow = self._flow(run)
+            if flow.owns_message(REVIEW):
                 message.task_result = output
                 message.status, message.fence, message.lease_until = "answered", None, None
-            practice = (
-                "practice" in plan.get("steps", [])
-                if run.graph_version in COMPOSABLE_GRAPH_VERSIONS
-                else plan.get("action") == "practice_weak_topics"
-                or plan.get("practice_after_review")
-            )
-            if practice and review and review["weak_topics"]:
-                plan = {**plan, "weak_topics": review["weak_topics"]}
-                run.plan = plan
-                await self._advance(session, run, "weak", "queued")
-            else:
-                if practice and review:
-                    run.outputs = [
-                        *run.outputs,
-                        {"kind": "notice", "text": "本次练习未发现需要复习的薄弱点。"},
-                    ]
-                await self._advance(session, run, "done", "completed")
+            weak_topics = bool(review and review["weak_topics"])
+            step = flow.after_review(has_review=review is not None, weak_topics=weak_topics)
+            if step.stage == WEAK:
+                assert review is not None
+                run.plan = {**plan, "weak_topics": review["weak_topics"]}
+            elif WEAK in flow.stages and review:
+                run.outputs = [
+                    *run.outputs,
+                    {"kind": "notice", "text": "本次练习未发现需要复习的薄弱点。"},
+                ]
+            await self._advance(session, run, step)
 
     async def grading_items(
         self, public_id: UUID, fence: UUID
@@ -1201,13 +1075,17 @@ class SqlAgentRunStore:
                         .values(status="published", result=None)
                     )
 
-    async def record_duration(self, public_id: UUID, seconds: float) -> None:
+    async def record_duration(self, public_id: UUID, seconds: float, reserved: int) -> None:
+        """Replace a claim's reservation with the measured duration; crashes keep it."""
         async with self.sessions.begin() as session:
             run = await session.scalar(
                 select(AgentRun).where(AgentRun.public_id == public_id).with_for_update()
             )
             if run:
+                spent = min(max(seconds, 0.0), float(reserved))
+                charged = run.usage.get("execution_seconds", 0) - reserved + spent
                 run.usage = {
                     **run.usage,
+                    "execution_seconds": round(max(charged, 0.0), 3),
                     "observed_seconds": run.usage.get("observed_seconds", 0) + seconds,
                 }

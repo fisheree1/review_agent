@@ -9,13 +9,11 @@ from app.learning.conversation_tasks import TaskPlan
 from app.learning.graph_tasks import GraphTaskPlan
 from app.rag.domain import Evidence
 
+# Supported versions are the current one and the one still running in production. Runs of
+# any other version close as RUN_VERSION_UNSUPPORTED instead of keeping old code paths alive.
 LEGACY_GRAPH_VERSION = "study-graph-v1"
-BATCHED_GRAPH_VERSIONS = ("study-graph-v4", "study-graph-v5")
 GRAPH_VERSION = "study-graph-v5"
-FAST_GRAPH_VERSIONS = ("study-graph-v3", *BATCHED_GRAPH_VERSIONS)
-PLANNED_GRAPH_VERSION = "study-graph-v2"
-COMPOSABLE_GRAPH_VERSIONS = (PLANNED_GRAPH_VERSION, *FAST_GRAPH_VERSIONS)
-SUPPORTED_GRAPH_VERSIONS = (LEGACY_GRAPH_VERSION, *COMPOSABLE_GRAPH_VERSIONS)
+SUPPORTED_GRAPH_VERSIONS = (LEGACY_GRAPH_VERSION, GRAPH_VERSION)
 TERMINAL_STATUSES = frozenset({"completed", "failed", "cancelled", "expired"})
 MAX_RUN_CALLS = 22
 MAX_RUN_TOKENS = 54_000
@@ -33,9 +31,6 @@ class AgentRunPersistence(Protocol):
     async def quiz_sources(
         self, public_id: UUID, fence: UUID, topic_vector: list[float] | None, topic: str
     ) -> list[Evidence]: ...
-    async def overview_sources(
-        self, public_id: UUID, fence: UUID
-    ) -> tuple[list[Evidence], dict[str, int]]: ...
     async def overview_batch(
         self, public_id: UUID, fence: UUID
     ) -> tuple[list[Evidence], dict[str, int]]: ...
@@ -79,11 +74,16 @@ class AgentRunPersistence(Protocol):
         self, public_id: UUID, fence: UUID, grades: list[dict[str, Any]]
     ) -> None: ...
     async def fail(self, public_id: UUID, fence: UUID, code: str) -> None: ...
-    async def record_duration(self, public_id: UUID, seconds: float) -> None: ...
+    async def record_duration(self, public_id: UUID, seconds: float, reserved: int) -> None: ...
+
+
+def is_composable(graph_version: str | None) -> bool:
+    """Composable runs plan ordered steps and may summarize a long PDF in batches."""
+    return graph_version == GRAPH_VERSION
 
 
 def run_seconds_limit(graph_version: str | None) -> int:
-    return MAX_OVERVIEW_RUN_SECONDS if graph_version in BATCHED_GRAPH_VERSIONS else MAX_RUN_SECONDS
+    return MAX_OVERVIEW_RUN_SECONDS if is_composable(graph_version) else MAX_RUN_SECONDS
 
 
 def check_run_budget(usage: dict[str, Any], graph_version: str | None = None) -> None:
