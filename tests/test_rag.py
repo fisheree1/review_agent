@@ -18,11 +18,75 @@ from app.rag.domain import (
     Scope,
     Task,
     split_content,
+    study_quote_options,
     validate_answer,
+    validate_study_answer,
     validate_vectors,
 )
 from app.rag.ports import RagStore
 from app.rag.providers import CloudModels
+
+
+@pytest.mark.parametrize("content", ["Exact text.", "a" * 1201, "Line.\n" * 300])
+def test_numbered_study_excerpts_keep_all_original_text_and_quote_limits(content: str) -> None:
+    options = study_quote_options(content)
+    assert "".join(options.values()) == content
+    assert all(8 <= len(quote) <= 800 and quote in content for quote in options.values())
+
+
+@pytest.mark.parametrize("quote_id", ["q1", "unknown", ["q1"]])
+def test_study_citation_ids_resolve_only_within_the_given_evidence(quote_id: Any) -> None:
+    source = Evidence(uuid4(), "The median resists\n extreme values.", 2, {})
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        context = json.loads(json.loads(request.content)["messages"][1]["content"])
+        assert context["evidence"][0]["quote_options"] == {"q1": source.content}
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "message": {
+                            "content": json.dumps(
+                                {
+                                    "insufficient_evidence": False,
+                                    "claims": [
+                                        {
+                                            "text": "Median is robust",
+                                            "citations": [
+                                                {
+                                                    "source_id": str(source.id),
+                                                    "quote_id": quote_id,
+                                                    "quote": "Fabricated fallback.",
+                                                }
+                                            ],
+                                        }
+                                    ],
+                                }
+                            )
+                        },
+                    }
+                ],
+                "usage": {"prompt_tokens": 100, "completion_tokens": 50},
+            },
+        )
+
+    async def run() -> dict[str, Any]:
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
+            provider = CloudModels(ModelSettings(deepseek_api_key=SecretStr("test-only")), client)
+            payload, _ = await provider.answer_study("Explain", [source])
+            return payload
+
+    payload = asyncio.run(run())
+    if quote_id == "q1":
+        assert (
+            validate_answer(payload, [source])["claims"][0]["citations"][0]["quote"]
+            == source.content
+        )
+    else:
+        with pytest.raises(RagFailure, match="回答未通过"):
+            validate_answer(payload, [source])
 
 
 def test_chunks_preserve_source_offsets_and_boundaries() -> None:
@@ -58,6 +122,105 @@ def test_citations_reject_fabricated_source_and_nonverbatim_quote() -> None:
     with pytest.raises(RagFailure):
         validate_answer(payload, [source])
     assert validate_answer({"insufficient_evidence": True}, [source])["claims"] == []
+
+
+def test_study_explanation_keeps_pdf_points_cited_and_refuses_missing_sources() -> None:
+    source = Evidence(uuid4(), "The median resists extreme outliers.", 3, {"kind": "page"})
+    payload = {
+        "insufficient_evidence": False,
+        "claims": [
+            {
+                "text": "The median resists outliers.",
+                "citations": [{"source_id": str(source.id), "quote": source.content}],
+            }
+        ],
+        "explanation": "  Sort the values first; the middle position determines the median.  ",
+    }
+    answer = validate_study_answer(payload, [source])
+    assert answer["explanation"] == (
+        "Sort the values first; the middle position determines the median."
+    )
+    assert "explanation" not in validate_answer(payload, [source])
+    with pytest.raises(RagFailure):
+        validate_study_answer(payload, [])
+    with pytest.raises(RagFailure):
+        validate_study_answer({**payload, "explanation": " "}, [source])
+    with pytest.raises(RagFailure):
+        validate_study_answer(
+            {"insufficient_evidence": False, "claims": payload["claims"]},
+            [source],
+            require_explanation=True,
+        )
+    assert validate_study_answer({**payload, "insufficient_evidence": True}, []) == {
+        "insufficient_evidence": True,
+        "claims": [],
+    }
+
+
+def test_study_generation_allows_general_explanation_without_changing_reader_rag() -> None:
+    prompts: list[str] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        prompts.append(body["messages"][0]["content"])
+        return httpx.Response(
+            200,
+            json={
+                "model": "test",
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "message": {
+                            "content": json.dumps({"insufficient_evidence": True, "claims": []})
+                        },
+                    }
+                ],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+            },
+        )
+
+    async def check() -> None:
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
+            provider = CloudModels(ModelSettings(deepseek_api_key=SecretStr("test-only")), client)
+            _, study_usage = await provider.answer_study("Explain the PDF", [])
+            _, reader_usage = await provider.answer("Explain the PDF", [])
+            assert study_usage["prompt_version"] != reader_usage["prompt_version"]
+
+    asyncio.run(check())
+    assert "You may use general knowledge" in prompts[0]
+    assert "Do not use outside knowledge" in prompts[1]
+
+
+@pytest.mark.parametrize(
+    "finish,content,reason",
+    [
+        ("length", '{"claims":[', "truncated"),
+        ("stop", "not valid JSON", "invalid_json"),
+    ],
+)
+def test_received_invalid_study_generation_preserves_known_usage_for_bounded_repair(
+    finish: str,
+    content: str,
+    reason: str,
+) -> None:
+    def handle(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "choices": [{"finish_reason": finish, "message": {"content": content}}],
+                "usage": {"prompt_tokens": 100, "completion_tokens": 50},
+            },
+        )
+
+    async def check() -> None:
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
+            models = CloudModels(ModelSettings(deepseek_api_key=SecretStr("test-only")), client)
+            payload, usage = await models.answer_study("Explain", [], mode="focused")
+            assert payload == {"_generation_error": reason}
+            assert usage["completion_tokens"] == 50 and usage["prompt_tokens"] == 100
+            assert usage["generation_error"] == reason
+
+    asyncio.run(check())
 
 
 @pytest.mark.parametrize("vector", [[0.0] * 1024, [1.0] * 512, [float("nan")] * 1024])
@@ -307,3 +470,78 @@ def test_index_retry_only_embeds_unfinished_batch() -> None:
         store.finish_index.assert_awaited_once_with(task)
 
     asyncio.run(check())
+
+
+def test_knowledge_sections_resolve_pages_from_scoped_evidence_and_reject_invented_sources():
+    from app.learning.api import StudyAnswerResponse
+
+    source = Evidence(
+        uuid4(),
+        "The median resists extreme outliers.",
+        13,
+        {"kind": "page", "position": 13, "title": None, "path": []},
+        document_id=uuid4(),
+        version_id=2,
+    )
+    point = {
+        "title": " Median ",
+        "text": "Median resists outliers.",
+        "explanation": " Sort the values and select the middle one. ",
+        "citations": [{"source_id": str(source.id), "quote": source.content, "unit": 999}],
+    }
+    payload = {"insufficient_evidence": False, "claims": [point]}
+    answer = validate_study_answer(payload, [source], require_sections=True)
+    saved = StudyAnswerResponse.model_validate(answer).model_dump(mode="json")
+    assert saved["claims"][0]["title"] == "Median"
+    assert saved["claims"][0]["explanation"] == "Sort the values and select the middle one."
+    citation = saved["claims"][0]["citations"][0]
+    assert citation["unit"] == 13 and citation["version_id"] == 2
+    assert citation["document_id"] == str(source.document_id)
+    with pytest.raises(RagFailure):
+        validate_study_answer(payload, [], require_sections=True)
+    point["citations"][0]["source_id"] = str(uuid4())
+    with pytest.raises(RagFailure):
+        validate_study_answer(payload, [source], require_sections=True)
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {},
+        {"title": "Median"},
+        {"title": " ", "explanation": "Example"},
+        {"title": "Median", "explanation": " "},
+        {"title": "x" * 121, "explanation": "Example"},
+        {"title": "Median", "explanation": "x" * 4001},
+    ],
+)
+def test_new_study_schema_rejects_missing_or_unbounded_section_teaching(fields):
+    source = Evidence(uuid4(), "The median resists extreme outliers.", 1, {"kind": "page"})
+    payload = {
+        "insufficient_evidence": False,
+        "claims": [
+            {
+                "text": "Median",
+                "citations": [{"source_id": str(source.id), "quote": source.content}],
+                **fields,
+            }
+        ],
+    }
+    with pytest.raises(RagFailure):
+        validate_study_answer(payload, [source], require_sections=True)
+
+
+def test_section_teaching_budget_is_shared_across_points():
+    source = Evidence(uuid4(), "The median resists extreme outliers.", 1, {"kind": "page"})
+    point = {
+        "title": "Median",
+        "text": "Median",
+        "explanation": "x" * 2001,
+        "citations": [{"source_id": str(source.id), "quote": source.content}],
+    }
+    with pytest.raises(RagFailure):
+        validate_study_answer(
+            {"insufficient_evidence": False, "claims": [point, point]},
+            [source],
+            require_sections=True,
+        )

@@ -15,16 +15,22 @@ from app.learning.agent import (
     MAX_SEARCHES,
     MAX_TOOL_STEPS,
     AgentBudget,
-    PlanningModel,
     PlanStep,
     RunCheck,
     SourceSearch,
+    StudyPlanningModel,
     ToolDecision,
 )
 from app.learning.domain import validate_candidates
 from app.learning.quiz_agent import QuizPlanningModel
-from app.learning.workflow import GRAPH_VERSION
-from app.rag.domain import Evidence, RagFailure, validate_answer, validate_vectors
+from app.learning.workflow import PLANNED_GRAPH_VERSION
+from app.rag.domain import (
+    STUDY_PROMPT_VERSION,
+    Evidence,
+    RagFailure,
+    validate_study_answer,
+    validate_vectors,
+)
 from app.rag.ports import Embeddings
 
 
@@ -150,7 +156,12 @@ class LangGraphStudyExecutor:
             await ensure_active()
             sources = list(state["selected"].values())
             if config is None:
-                result: Any = validate_answer(state["payload"], sources)
+                result: Any = validate_study_answer(
+                    state["payload"],
+                    sources,
+                    require_sections=state["last_usage"].get("prompt_version")
+                    == STUDY_PROMPT_VERSION,
+                )
             else:
                 result = validate_candidates(state["payload"], config, sources)
                 if not result:
@@ -202,7 +213,7 @@ class LangGraphStudyExecutor:
             planning_prompt_version=state["planning_prompt_version"],
             trace=state["trace"],
         )
-        return state["result"], {**usage, "graph_version": GRAPH_VERSION}
+        return state["result"], {**usage, "graph_version": PLANNED_GRAPH_VERSION}
 
     async def answer(
         self,
@@ -210,7 +221,7 @@ class LangGraphStudyExecutor:
         history: list[dict[str, str]],
         *,
         embeddings: Embeddings,
-        model: PlanningModel,
+        model: StudyPlanningModel,
         search: SourceSearch,
         ensure_active: RunCheck,
         budget: AgentBudget,
@@ -221,7 +232,7 @@ class LangGraphStudyExecutor:
             return await model.plan_step(question, history=history, observations=observations)
 
         async def generate(items: list[dict[str, Any]]) -> tuple[dict[str, Any], dict[str, Any]]:
-            return await model.answer(question, items[0]["sources"], history=history)
+            return await model.answer_study(question, items[0]["sources"], history=history)
 
         return await self._execute(
             decide=decide,

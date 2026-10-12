@@ -9,12 +9,12 @@ import { StudyPage } from "./StudyPage";
 
 vi.mock("../api/learning", async (original) => ({
   ...(await original<typeof learning>()), listCollections: vi.fn(), listConversations: vi.fn(),
-  listConversationGroups: vi.fn(), getConversation: vi.fn(), askConversation: vi.fn(), cancelConversationMessage: vi.fn(),
+  listConversationGroups: vi.fn(), getConversation: vi.fn(), getAgentRun: vi.fn(), askConversation: vi.fn(), cancelConversationMessage: vi.fn(),
 }));
 vi.mock("../hooks/useDocuments", () => ({ useDocuments: () => ({ documents: [], nextCursor: null }) }));
 vi.mock("../components/AppHeader", () => ({ AppHeader: () => <header>Review Agent</header> }));
-vi.mock("../components/StudySourcePanel", () => ({ StudySourcePanel: ({ source, onClose }: { source: { unit: number }; onClose: () => void }) =>
-  <aside aria-label="原文预览"><span>PDF 第 {source.unit} 页</span><button onClick={onClose} type="button">关闭原文预览</button></aside> }));
+vi.mock("../components/StudySourcePanel", () => ({ StudySourcePanel: ({ section }: { section?: { sources: { citation: { unit: number } }[] } }) =>
+  <aside aria-label="原文预览">{section ? <span>PDF 第 {section.sources[0]?.citation.unit} 页</span> : null}</aside> }));
 afterEach(() => { cleanup(); vi.clearAllMocks(); });
 
 function show(messages: learning.ConversationMessage[] = [], scoped = true) {
@@ -37,9 +37,20 @@ test("task examples only draft a request and keyboard submission creates one tas
   expect(composer).toHaveFocus();
   expect(composer).toHaveValue("根据所选资料生成 5 道中等难度单选题。");
   expect(learning.askConversation).not.toHaveBeenCalled();
-  await user.keyboard("{Control>}{Enter}{/Control}");
+  await user.keyboard("{Enter}");
   await waitFor(() => expect(learning.askConversation).toHaveBeenCalledWith("conversation", "根据所选资料生成 5 道中等难度单选题。", expect.any(String)));
   expect(composer).toHaveValue("");
+});
+
+test("Shift+Enter adds a line without sending the draft", async () => {
+  const user = userEvent.setup();
+  show();
+  const composer = await screen.findByRole("textbox", { name: "发送任务或问题" });
+  await user.type(composer, "第一点");
+  await user.keyboard("{Shift>}{Enter}{/Shift}");
+  await user.type(composer, "第二点");
+  expect(composer).toHaveValue("第一点\n第二点");
+  expect(learning.askConversation).not.toHaveBeenCalled();
 });
 
 test("running task has a stop control and prevents overlapping submissions", async () => {
@@ -48,9 +59,22 @@ test("running task has a stop control and prevents overlapping submissions", asy
   vi.mocked(learning.cancelConversationMessage).mockResolvedValue({ ...message, status: "cancelled" });
   show([message]);
   await user.type(await screen.findByRole("textbox", { name: "发送任务或问题" }), "下一项任务");
-  expect(screen.getByRole("button", { name: "发送" })).toBeDisabled();
-  await user.click(screen.getByRole("button", { name: "停止任务" }));
+  expect(screen.queryByRole("button", { name: "发送" })).not.toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "停止生成" }));
   await waitFor(() => expect(learning.cancelConversationMessage).toHaveBeenCalledWith("conversation", "active"));
+});
+
+test("composer stops an older run resumed after a newer answered message", async () => {
+  const user = userEvent.setup();
+  const base: learning.ConversationMessage = { id: "older", run_id: "run-older", question: "生成练习", status: "answered", scope: [], answer: null, failure_message: null, feedback: null };
+  vi.mocked(learning.getAgentRun).mockImplementation(async (id) => ({
+    id, status: id === "run-older" ? "running" : "completed", stage: id === "run-older" ? "review" : "done", revision: 2,
+    scope: [], plan: null, outputs: [], clarification: null, failure_message: null, expires_at: "2026-10-01T00:00:00Z",
+  }));
+  vi.mocked(learning.cancelConversationMessage).mockResolvedValue({ ...base, status: "cancelled" });
+  show([base, { ...base, id: "newer", run_id: "run-newer", question: "补充问题" }]);
+  await user.click(await screen.findByRole("button", { name: "停止生成" }));
+  await waitFor(() => expect(learning.cancelConversationMessage).toHaveBeenCalledWith("conversation", "older"));
 });
 
 test("task clarification is readable without showing answer feedback or creating artifacts", async () => {
@@ -86,20 +110,19 @@ test("a first-time visitor without materials is sent to upload before creating a
   expect(screen.queryByRole("button", { name: "新建对话" })).not.toBeInTheDocument();
 });
 
-test("groups repeated citations after the answer and previews the PDF in a side panel", async () => {
+test("historical points and their full explanation retain usable original sources", async () => {
   const citation = { source_id: "source", document_id: "document", version_id: 1, unit: 3, quote: "A cited passage",
     locator: { kind: "page" as const, position: 3, title: null, path: [] } };
   show([{ id: "answer", question: "关键概念是什么？", status: "answered",
     scope: [{ document_id: "document", version_id: 1, filename: "stats.pdf" }],
     answer: { insufficient_evidence: false, claims: [
       { text: "第一个结论。", citations: [citation] }, { text: "第二个结论。", citations: [citation] },
-    ] }, failure_message: null, feedback: null }]);
+    ], explanation: "排序后取中间位置，可以帮助理解中位数为何较稳定。" }, failure_message: null, feedback: null }]);
 
   expect(await screen.findByText("第二个结论。")).toBeVisible();
+  expect(screen.getByText("排序后取中间位置，可以帮助理解中位数为何较稳定。")).toBeVisible();
+  expect(screen.queryByText(/属于原文|不属于原文/)).not.toBeInTheDocument();
   expect(screen.queryByRole("link", { name: /第 3 页/ })).not.toBeInTheDocument();
-  await userEvent.click(screen.getByText("来源 · 1"));
-  await userEvent.click(screen.getByRole("button", { name: "stats.pdf · 第 3 页" }));
+  await userEvent.click(screen.getByRole("button", { name: "详细讲解 查看原文" }));
   expect(screen.getByLabelText("原文预览")).toHaveTextContent("PDF 第 3 页");
-  await userEvent.click(screen.getByRole("button", { name: "关闭原文预览" }));
-  expect(screen.queryByLabelText("原文预览")).not.toBeInTheDocument();
 });

@@ -25,6 +25,15 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database_schema import APPLICATION_SCHEMA as S
 from app.core.models import Base
+from app.rag.lexical import lexical_document
+
+# Keep identical to migration 0018 and app.rag.retrieval.SEARCH_VECTOR.
+SEARCH_VECTOR_SQL = "to_tsvector('simple'::regconfig, search_text)"
+
+
+def _search_text_default(context: Any) -> str:
+    # Every insert path (store, scripts, tests) gets lexical terms without opting in.
+    return lexical_document(context.get_current_parameters()["content"])
 
 
 class DocumentIndex(Base):
@@ -76,6 +85,7 @@ class DocumentChunk(Base):
             name="ck_document_chunks_offsets",
         ),
         Index("ix_document_chunks_scope", "workspace_id", "index_id"),
+        Index("ix_document_chunks_search", text(SEARCH_VECTOR_SQL), postgresql_using="gin"),
         {"schema": S},
     )
     id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
@@ -87,6 +97,8 @@ class DocumentChunk(Base):
     start_offset: Mapped[int] = mapped_column(Integer)
     end_offset: Mapped[int] = mapped_column(Integer)
     content: Mapped[str] = mapped_column(Text)
+    # Tokenized terms (see app.rag.lexical); PostgreSQL's parser cannot segment CJK text.
+    search_text: Mapped[str | None] = mapped_column(Text, default=_search_text_default)
     embedding: Mapped[list[float] | None] = mapped_column(Vector(1024))
 
 

@@ -96,6 +96,7 @@ test("desktop panels keep files and conversation actions in view; narrow screens
   await expect(navigation).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(menu).toBeFocused();
+  await page.getByRole("button", { name: "展开对话列表" }).click();
   await page.getByLabel(`管理对话 ${conversation.title}`).click();
   await page.getByRole("button", { name: "重命名", exact: true }).click();
   const renameDialog = page.getByRole("dialog", { name: "重命名对话" });

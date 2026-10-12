@@ -9,6 +9,7 @@ import {
 import { AppHeader } from "../components/AppHeader";
 import { ErrorState } from "../components/ErrorState";
 import { SelectField } from "../components/SelectField";
+import { PageHeading } from "../components/PageHeading";
 import { ScopePicker } from "../components/ScopePicker";
 import { useDocuments } from "../hooks/useDocuments";
 
@@ -61,8 +62,7 @@ export function QuizPage() {
   return <div className="app-page">
     <AppHeader />
     <main className="learning-page quiz-page" id="main-content" tabIndex={-1}>
-      <header className="learning-heading"><h1>练习</h1>
-        </header>
+      <PageHeading title="练习" kicker="学以致用" description="把理解变成练习，在每一次作答中找到进步。" />
       {error ? <ErrorState message={error.message} onRetry={() => { void refreshDocuments(); void collections.refetch(); void quizzes.refetch(); if (quizId) { void quiz.refetch(); void attempts.refetch(); } }} /> : null}
       <div className="learning-grid quiz-layout">
         <div className="learning-content">

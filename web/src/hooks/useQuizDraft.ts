@@ -55,10 +55,11 @@ export function useQuizDraft(quizId: string, attemptId: string, initialRevision:
       if (pending.current.size || active.current) { event.preventDefault(); event.returnValue = ""; }
     };
     const navigate = (event: MouseEvent) => {
-      if (!(event.target instanceof Element) || !event.target.closest("a[href]")) return;
+      const link = event.target instanceof Element ? event.target.closest<HTMLAnchorElement>("a[href]") : null;
+      if (!link || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || link.target === "_blank" || link.hasAttribute("download")) return;
       if (pending.current.size || active.current) {
         event.preventDefault();
-        void flush().catch(() => undefined);
+        void flush().then(() => { if (link.isConnected) link.click(); }).catch(() => undefined);
       }
     };
     window.addEventListener("beforeunload", unload);

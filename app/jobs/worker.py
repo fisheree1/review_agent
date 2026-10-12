@@ -14,6 +14,15 @@ from app.documents.infrastructure.pdf_parser import PypdfDocumentParser
 from app.documents.infrastructure.repository import SqlAlchemyDocumentsUnitOfWork
 from app.documents.infrastructure.storage import MinioDocumentStorage
 from app.jobs.heartbeat import run_worker_heartbeat
+from app.jobs.lanes import (
+    AGENT,
+    INGEST,
+    INTERACTIVE,
+    Lane,
+    NamedStep,
+    parse_lane_names,
+    run_lanes,
+)
 from app.learning.application import LearningProcessor
 from app.learning.infrastructure.langgraph_workflow import LangGraphStudyExecutor
 from app.learning.run_application import AgentRunProcessor
@@ -75,21 +84,44 @@ async def run_worker() -> None:
     runs = AgentRunProcessor(
         SqlAgentRunStore(learning.store), models, models, LangGraphStudyExecutor()
     )
+    available = {
+        # Short, user-facing model work: a person is waiting on each of these.
+        INTERACTIVE: Lane(
+            INTERACTIVE,
+            (
+                NamedStep("rag_question", rag.process_question),
+                NamedStep("conversation_message", learning.process_message),
+                NamedStep("quiz_grading", learning.process_grading),
+            ),
+            settings.worker_interactive_concurrency,
+        ),
+        # Multi-step agent runs and Quiz generation may hold a slot for several minutes.
+        # Disabling new graph requests must not strand existing waiting runs.
+        AGENT: Lane(
+            AGENT,
+            (
+                NamedStep("agent_run", runs.process_next),
+                NamedStep("quiz_generation", learning.process_quiz),
+            ),
+            settings.worker_agent_concurrency,
+        ),
+        # PDF parsing/OCR and embedding batches: CPU, memory and bulk provider usage.
+        INGEST: Lane(
+            INGEST,
+            (
+                NamedStep("document_parse", processor.process_next),
+                NamedStep("rag_index", rag.process_index),
+            ),
+            settings.worker_ingest_concurrency,
+        ),
+    }
+    lanes = [available[name] for name in parse_lane_names(settings.worker_lanes)]
+    logger.info(
+        "worker_lanes_configured lanes=%s",
+        ",".join(f"{lane.name}x{lane.concurrency}" for lane in lanes),
+    )
     try:
-        while not stop_event.is_set():
-            processed = await processor.process_next()
-            processed = await rag.process_question() or processed
-            processed = await learning.process_message() or processed
-            # Disabling new graph requests must not strand existing waiting runs.
-            processed = await runs.process_next() or processed
-            processed = await learning.process_grading() or processed
-            processed = await learning.process_quiz() or processed
-            processed = await rag.process_index() or processed
-            if not processed:
-                try:
-                    await asyncio.wait_for(stop_event.wait(), timeout=settings.job_poll_seconds)
-                except TimeoutError:
-                    pass
+        await run_lanes(lanes, stop_event=stop_event, poll_seconds=settings.job_poll_seconds)
     finally:
         await model_client.aclose()
         stop_event.set()

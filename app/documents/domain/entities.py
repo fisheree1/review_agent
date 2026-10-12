@@ -104,6 +104,8 @@ class ClaimedJob:
     object_key: str
     media_type: str
     source_sha256: str
+    # Fencing token: a claim only owns the job while the row still has this attempt number.
+    attempt: int = 0
 
 
 @dataclass(frozen=True, slots=True)

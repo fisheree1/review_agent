@@ -115,13 +115,12 @@ test("switch document scope, rate a cited answer, and complete an Agent Quiz", a
   await page.getByLabel("发送任务或问题").fill("Why use the median?");
   await page.getByRole("button", { name: "发送", exact: true }).click();
   await expect(page.getByText("A class initializes an object.")).toBeVisible();
-  await page.getByText("来源 · 1").click();
-  await page.getByRole("button", { name: "classes.pdf · 第 1 页" }).click();
+  await page.getByRole("button", { name: "知识点 1 查看原文" }).click();
   await expect(page.getByRole("complementary", { name: "原文预览" })).toBeVisible();
   await expect(page.getByRole("img", { name: "PDF 原文件第 1 页" })).toBeVisible();
-  await page.getByRole("button", { name: "关闭原文预览" }).click();
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.getByRole("button", { name: "classes.pdf · 第 1 页" }).click();
+  if (await page.getByRole("dialog", { name: "原文预览" }).isVisible()) await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "知识点 1 查看原文" }).click();
   await expect(page.getByRole("dialog", { name: "原文预览" })).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(page.getByRole("dialog", { name: "原文预览" })).toHaveCount(0);

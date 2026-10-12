@@ -91,6 +91,15 @@ class TaskPlanningModel(Protocol):
         self, request: str, *, history: list[dict[str, str]], review_available: bool
     ) -> tuple[dict[str, Any], dict[str, Any]]: ...
 
+    async def plan_graph_task(
+        self,
+        request: str,
+        *,
+        history: list[dict[str, str]],
+        review_available: bool,
+        memory_summary: str,
+    ) -> tuple[dict[str, Any], dict[str, Any]]: ...
+
 
 def validate_task_plan(payload: dict[str, Any]) -> TaskPlan:
     try:

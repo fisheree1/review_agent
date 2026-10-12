@@ -70,6 +70,8 @@ export function DocumentList({
             <article className={`document-card${selectedIds ? " document-card--selecting" : ""}`} key={document.id}>
               {selectedIds ? <label className="document-selection"><input aria-label={`选择 ${document.filename}`} type="checkbox" checked={selectedIds.includes(document.id)} disabled={selectionDisabled || (selectedIds.length >= 100 && !selectedIds.includes(document.id))} onChange={() => onToggleSelection?.(document.id)} /></label> : null}
               <div className="document-card__body">
+                <span className="document-card__file-icon" aria-hidden="true"><Icon name="document" /></span>
+                <div className="document-card__content">
                 <div className="document-card__topline">
                   <StatusBadge status={document.status} />
                   <time dateTime={document.updated_at}>{formatDate(document.updated_at)}</time>
@@ -85,6 +87,7 @@ export function DocumentList({
                 {document.status === "failed" ? (
                   <p className="document-card__error">{document.failure_message ?? "处理失败，请稍后重试"}</p>
                 ) : null}
+                </div>
               </div>
               {canOpen ? (
                 <Link aria-label={`${document.status === "failed" ? "查看失败原因" : "预览"} ${document.filename}`} className="document-card__link" to={`/documents/${document.id}`}>

@@ -4,7 +4,7 @@ from collections import defaultdict
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import and_, func, select
+from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ApplicationError
@@ -12,6 +12,7 @@ from app.documents.infrastructure.models import DocumentModel, DocumentPageModel
 from app.learning.models import Collection, CollectionDocument
 from app.rag.domain import Evidence
 from app.rag.models import DocumentChunk, DocumentIndex
+from app.rag.retrieval import evidence_from_row, hybrid_candidates, page_locator
 
 ScopeSnapshot = list[dict[str, Any]]
 
@@ -203,43 +204,19 @@ async def retrieve_sources(
             DocumentChunk.embedding.is_not(None),
         )
     )
-    lexical_rank = func.ts_rank_cd(
-        func.to_tsvector("simple", DocumentChunk.content),
-        func.plainto_tsquery("simple", query_text),
-    )
     scores: dict[UUID, float] = defaultdict(float)
     evidence: dict[UUID, Evidence] = {}
     for version in versions:
-        scoped = query.where(DocumentIndex.document_version_id == version)
-        semantic = (
-            await session.execute(scoped.order_by(distance, DocumentChunk.id).limit(12))
-        ).all()
-        lexical = (
-            await session.execute(
-                scoped.where(lexical_rank > 0)
-                .order_by(lexical_rank.desc(), DocumentChunk.id)
-                .limit(12)
-            )
-        ).all()
-        for ranking in (semantic, lexical):
-            for rank, (chunk, page, document_id, version_id, cosine) in enumerate(ranking, start=1):
-                if float(cosine) > 0.8:
-                    continue
-                scores[chunk.public_id] += 1 / (60 + rank)
-                evidence[chunk.public_id] = Evidence(
-                    chunk.public_id,
-                    chunk.content,
-                    chunk.unit,
-                    {
-                        "kind": page.locator_kind,
-                        "position": page.locator_position,
-                        "title": page.locator_title,
-                        "path": page.locator_path,
-                    },
-                    1 - float(cosine),
-                    document_id,
-                    version_id,
-                )
+        candidates = await hybrid_candidates(
+            session,
+            query.where(DocumentIndex.document_version_id == version),
+            distance=distance,
+            query_text=query_text,
+        )
+        for row, score in candidates:
+            source = evidence_from_row(row, document_id=row[2], version_id=row[3])
+            scores[source.id] += score
+            evidence[source.id] = source
     ordered = sorted(scores, key=lambda source_id: scores[source_id], reverse=True)
     # Reserve one relevant source from each selected document before filling by rank.
     result: list[Evidence] = []
@@ -327,12 +304,7 @@ async def quiz_sources(
                     chunk.public_id,
                     chunk.content,
                     chunk.unit,
-                    {
-                        "kind": page.locator_kind,
-                        "position": page.locator_position,
-                        "title": page.locator_title,
-                        "path": page.locator_path,
-                    },
+                    page_locator(page),
                     0,
                     document_id,
                     version_id,

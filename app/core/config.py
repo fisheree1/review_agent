@@ -8,6 +8,8 @@ from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine import URL
 
+from app.jobs.lanes import parse_lane_names
+
 
 def build_database_url(
     *,
@@ -189,6 +191,17 @@ class WorkerSettings(DatabaseSettings):
     max_pdf_pages: int = Field(default=500, gt=0)
     max_pdf_characters: int = Field(default=5_000_000, gt=0)
     worker_heartbeat_seconds: float = Field(default=5.0, gt=0)
+    # Comma-separated subset of interactive,agent,ingest. Separate containers may each run
+    # a subset; every job is claimed with SKIP LOCKED and a fenced lease.
+    worker_lanes: str = "interactive,agent,ingest"
+    worker_interactive_concurrency: int = Field(default=2, ge=1, le=8)
+    worker_agent_concurrency: int = Field(default=1, ge=1, le=8)
+    worker_ingest_concurrency: int = Field(default=1, ge=1, le=4)
+
+    @field_validator("worker_lanes")
+    @classmethod
+    def validate_worker_lanes(cls, value: str) -> str:
+        return ",".join(parse_lane_names(value))
 
 
 class MigrationSettings(EnvironmentSettings):

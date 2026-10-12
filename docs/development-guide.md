@@ -185,6 +185,8 @@ docker compose ps
 
 `0002_document_ingestion` 创建资料闭环所需的五张表。`0003`–`0007` 逐步增加游标索引、租户完整性、Worker 心跳与统一 citation locator；`0008_cited_rag` 增加索引、分块和独立问答任务；`0009_learning_core` 增加集合、连续对话、反馈、Quiz 与作答表；`0010_user_auth` 增加账号、成员、密码哈希、会话及登录限流；`0011_version_purge_trigger` 将学习记录清理限定于解析版本实际删除。每次改模型后运行 `docker compose run --rm database-init alembic check`，并从空库与上一 revision 验证升级。
 
+`0016_conversation_memory` 为对话添加可空的同资料范围记忆投影。发布顺序为迁移、兼容 v1/v2 的 Worker、创建 v2 运行的 API/Web；避免旧 Worker 领取并拒绝新运行。旧运行仍按 `study-graph-v1` 恢复；回退应用时保留新增列，避免丢失会话数据。知识点 PDF 使用随应用镜像分发的 Noto Sans SC 字体和 ReportLab，不依赖服务器系统字体。
+
 当前 Worker 直接领取 PostgreSQL 中的持久任务，使用短事务、租约、尝试上限和幂等键。PDF 解析在禁止网络的子进程执行，API 只做流式上传与结构校验，不解析正文。将 Redis 用作任务队列或引入 Celery 前先依据 [ADR-0001](./adr/0001-postgresql-document-jobs.md) 的迁移门槛评审，不能形成第二份任务状态。
 
 Redis 当前只做 API 限流：登录按邮箱摘要，上传、索引、问答、Quiz 和反馈按工作区计数。限流脚本原子设置过期时间，并允许同一工作区和动作的幂等键重放。超额返回 `RATE_LIMITED`（429）；Redis 不可用返回 `RATE_LIMIT_UNAVAILABLE`（503），不继续执行高成本操作。开发模式直接运行 API 时默认关闭 Redis 限流；Compose 中开启。生产模式必须启用并配置 Redis 密码。
@@ -198,3 +200,30 @@ React 前端位于 `web/`。服务端状态由 TanStack Query 管理，当前资
 ## 学习图开发与验证
 
 应用逻辑只依赖 `StudyExecutor`、`AgentRunPersistence`；LangGraph 与 SQLAlchemy 代码放在适配器，不向领域层导入。修改图/Prompt/计划需提升相应版本，未知版本运行进入阻塞。调用预算跨恢复累计，严禁自动重发未知请求；阶段成果与恢复位置同事务。运行角色不执行 saver setup，不开启包含原文的外部追踪。修改后的重点门禁为图单元、工作区隔离、PostgreSQL 恢复/删除、0013→0014 迁移及完整移动端流程，详见 [工作流设计](./agent-workflow-development.md#12-本次交付与设计调整)。
+
+### 快速问答与复习的验证
+
+真实课程 PDF 的金标准与当前对话 Agent 实测使用 `scripts.evaluate_pdf_agent.py`，流程与评分边界见 [真实 PDF 评测指南](./real-pdf-agent-evaluation.md)。私人金标准、回答和报告只存 `evals/local/`；默认预检不调用模型，`--live` 才运行付费服务。不要将关键词初筛通过率当成语义正确率。
+
+- `pytest -q tests/test_focused_answer.py tests/test_graph_run_processor.py tests/test_agent_evaluation.py tests/test_spaced_review.py`：引用、证据不足、预算/取消、旧图兼容、生成调用数及评分规则/API。
+- `python -m scripts.verify_spaced_review --isolated [--previous]`：仅在预装 pgvector 的空临时库运行；验证空库或 0016 升级、元数据一致、个人/空间隔离、重复导入、同键重放、并发 revision、到期索引、成员与来源删除。
+- `pnpm --dir web test src/pages/ReviewPage.test.tsx`：答案隐藏、键盘展开、保留请求键的网络重试及加载/错误/空状态。
+- `pnpm --dir web exec playwright test e2e/spaced-review.spec.ts`：从错题导入到复习自评及刷新恢复，覆盖 390px 与 1280px。需先启动测试前端。
+
+
+### 长 PDF 覆盖验证
+
+`evals/overview-v1.json` 定义长文、极密首页、可完整读取短文三个覆盖案例，`tests/test_overview.py` 比较旧 15 片段选样与新策略的实际页覆盖，并验证多文档首批配额、批次上限及知识点合并。它衡量输入来源覆盖，不能替代真实模型的语义提取评估。
+
+`python -m scripts.verify_long_pdf_overview --isolated` 必须使用没有工作区的已迁移临时数据库。该脚本构造 72 页正文及越权/未选择资料，验证读取 64 页、8 次有界生成、跨空间隔离、调用结果回放、逐批合并、预算限制保留成果、取消及来源删除。模型为确定性 fixture，不调用外部付费服务。UI 验证使用 `AgentRunCard.test.tsx` 与 `e2e/long-pdf-overview.spec.ts`，覆盖窄屏进度和刷新恢复。
+
+
+知识点联动阅读的定向检查：后端 `tests/test_rag.py`、`test_focused_answer.py`、`test_langgraph_workflow.py`、`test_graph_run_processor.py`、`test_overview.py`、`test_study_pdf.py` 检查逐点结构、范围外来源拒绝、页码解析、旧回执、分批合并及导出；前端 `StudyPage.test.tsx`、`StudySourcePanel.test.tsx`、`PdfPreview.test.tsx` 与 `web/e2e/study-linked-reading.spec.ts` 检查历史兼容、预览失败恢复、跟随开关、跨资料切换、重复下载和 390px 键盘返回。浏览器使用合成 PDF，不调用真实模型；实际讲解质量仍需真实资料评估。
+
+### v5 PDF 生成质量与诊断验证
+
+`pytest -q tests/test_study_generation.py tests/test_rag.py tests/test_pdf_parser.py tests/test_graph_run_processor.py tests/test_pdf_agent_evaluation.py` 验证原文摘录编号、未知编号拒绝、换行恢复的唯一性、数字/措辞不更改、一次修复的实际计费、预算和取消、未知请求不重试、混合图文与小 logo 区分、OCR 多行标签、v4 批次恢复以及跨状态快照发布后的评测读取。
+
+隔离 PostgreSQL 脚本 `verify_long_pdf_overview --isolated` 另验证两次生成回执恢复不会再次计费、诊断去重、错误租约和额外敏感字段拒绝。fixture 不调用外部模型。当前 v5 使用已有 JSONB 和回执表，无额外迁移；采用现有 0017 临时库运行，禁止连接真实资料库。
+
+真实验证必须固定 PDF/金标准哈希，区分中途调试运行和最终冻结版本；报告保存应用源码指纹、Prompt/图/解析版本、主问题与前置轮次用量。关键词和引文初筛通过仍需按 rubric 检查语义，不通过修改参考答案提高分数。OCR 位置不能用于宣称箭头识别正确。

@@ -100,7 +100,7 @@ test("library filtering, mobile keyboard navigation and task-first learning rema
   await page.screenshot({ path: "/private/tmp/review-agent-library-desktop.png", fullPage: true });
   await page.getByRole("button", { name: "切换到深色模式" }).click();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
-  await expect.poll(() => page.getByRole("main").evaluate((element) => getComputedStyle(element).backgroundColor)).toBe("rgb(32, 36, 44)");
+  await expect.poll(() => page.getByRole("main").evaluate((element) => getComputedStyle(element).backgroundColor)).toBe("rgb(23, 26, 32)");
   await page.screenshot({ path: "/private/tmp/review-agent-library-dark.png", fullPage: true });
   await page.emulateMedia({ reducedMotion: "no-preference" });
   await page.setViewportSize({ width: 390, height: 844 });
@@ -137,10 +137,16 @@ test("library filtering, mobile keyboard navigation and task-first learning rema
   await expect(history.getByRole("heading", { name: "历史问题 1", exact: true })).toBeInViewport();
   await page.getByRole("button", { name: "有新回复 · 查看最新" }).click();
   await expect(history.getByRole("heading", { name: "解释中位数", exact: true })).toBeInViewport();
-  await history.getByText("预览引用摘录").click();
-  await expect(history.locator(".source-preview blockquote")).toHaveText("The median resists extreme outliers.");
+  const latest = history.locator(".learning-message").filter({ has: page.getByRole("heading", { name: "解释中位数", exact: true }) });
+  await latest.getByRole("button", { name: "知识点 1 查看原文" }).click();
+  const source = page.getByRole("dialog", { name: "原文预览", exact: true });
+  await source.getByText("引用摘录", { exact: true }).click();
+  await expect(source.locator("blockquote")).toHaveText("The median resists extreme outliers.");
+  await source.getByRole("button", { name: "关闭原文预览" }).click();
   await expect(page).toHaveURL(`/study/${conversationId}`);
   const content = await page.getByRole("region", { name: "当前对话" }).boundingBox();
+  const expandHistory = page.getByRole("button", { name: "展开对话列表" });
+  if (await expandHistory.isVisible()) await expandHistory.click();
   const management = await page.getByRole("complementary", { name: "集合与对话" }).boundingBox();
   expect(content!.y).toBeLessThan(management!.y);
   await page.evaluate(() => { (document.activeElement as HTMLElement)?.blur(); window.scrollTo({ top: 0, behavior: "instant" }); });
