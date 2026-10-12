@@ -74,6 +74,7 @@ def test_step_error_is_isolated_and_lane_keeps_polling() -> None:
 def test_concurrency_runs_parallel_slots_of_one_lane() -> None:
     async def check() -> None:
         stop = asyncio.Event()
+        both_running = asyncio.Event()
         running = 0
         peak = 0
 
@@ -81,7 +82,10 @@ def test_concurrency_runs_parallel_slots_of_one_lane() -> None:
             nonlocal running, peak
             running += 1
             peak = max(peak, running)
-            await asyncio.sleep(0.05)
+            if running == 2:
+                both_running.set()
+            # Serial execution never sets the event, so the lane times out and the test fails.
+            await asyncio.wait_for(both_running.wait(), 1)
             running -= 1
             stop.set()
             return True
