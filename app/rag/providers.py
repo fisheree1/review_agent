@@ -100,7 +100,7 @@ alone do not authorize creating a quiz. Never output workspace, document, quiz o
 Clarifications only ask for missing inputs or explain capability limits, never factual answers.
 """
 
-GRAPH_TASK_PROMPT_VERSION = "study-intent-plan-v2"
+GRAPH_TASK_PROMPT_VERSION = "study-intent-plan-v3"
 GRAPH_TASK_PROMPT = """Plan the requested outcome in a private PDF study conversation.
 Return one JSON object with exactly these keys:
 {"steps":["summary","pdf","quiz","review","practice"],
@@ -116,6 +116,12 @@ outlines. Use pdf only when the user asks to create or download a knowledge-poin
 summary. Use quiz for creating questions. Use review for an actual submitted practice's answers or
 mistakes. Use practice only for a new quiz based on actual reviewed weak topics; it requires review.
 These steps can be combined. A request for a PDF and questions becomes summary,pdf,quiz.
+Plan every requested step, including steps that run later. When the current request creates a quiz
+and asks to review, check or explain mistakes after the user submits or answers it, add review
+after quiz. If it also asks for follow-up or weak-topic practice, add practice after review.
+For example, explain a topic, create a quiz, then review my mistakes after I submit becomes
+summary,quiz,review; adding weak-topic practice becomes summary,quiz,review,practice.
+Such follow-up steps wait for submission; select them even when no submitted practice exists yet.
 Use clarification only when the request is unclear or unsupported; then steps is empty.
 For summary, summary_request is a focused restatement of the requested subject, at most 1200 chars.
 Use summary_mode overview for a whole-document outline or knowledge-point PDF. It samples the

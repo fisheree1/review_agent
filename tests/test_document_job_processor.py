@@ -40,9 +40,17 @@ def claimed(attempt: int = 1) -> ClaimedJob:
 
 
 class FakeRepository:
-    def __init__(self, *, renew_results: list[bool] | None = None, complete: bool = True) -> None:
+    def __init__(
+        self,
+        *,
+        renew_results: list[bool] | None = None,
+        complete: bool = True,
+        lose_after: asyncio.Event | None = None,
+    ) -> None:
         self.job: ClaimedJob | None = claimed()
         self.renew_results = renew_results
+        # Report a lost lease only once this event is set, so tests do not race job setup.
+        self.lose_after = lose_after
         self.renewals = 0
         self.complete_result = complete
         self.completed: list[ClaimedJob] = []
@@ -54,9 +62,10 @@ class FakeRepository:
 
     async def renew_job_lease(self, *, job: ClaimedJob, lease_seconds: int) -> bool:
         self.renewals += 1
-        if self.renew_results:
-            return self.renew_results.pop(0)
-        return True
+        renewed = self.renew_results.pop(0) if self.renew_results else True
+        if not renewed and self.lose_after is not None:
+            await self.lose_after.wait()
+        return renewed
 
     async def complete_job(self, *, job: ClaimedJob, parsed: ParsedDocument) -> bool:
         self.completed.append(job)
@@ -102,10 +111,12 @@ class SlowParser:
         self.seconds = seconds
         self.error = error
         self.cancelled = False
+        self.started = asyncio.Event()
         self.paths: list[Path] = []
 
     async def parse(self, source_path: Path, *, media_type: str) -> ParsedDocument:
         self.paths.append(source_path)
+        self.started.set()
         try:
             await asyncio.sleep(self.seconds)
         except asyncio.CancelledError:
@@ -143,8 +154,8 @@ def test_long_parse_keeps_renewing_lease_and_completes() -> None:
 
 def test_lost_lease_cancels_parse_without_writing_results() -> None:
     async def check() -> None:
-        repository = FakeRepository(renew_results=[True, False])
         parser = SlowParser(5)
+        repository = FakeRepository(renew_results=[True, False], lose_after=parser.started)
 
         assert await asyncio.wait_for(processor(repository, parser).process_next(), 2) is True
 
@@ -195,7 +206,7 @@ def test_outer_cancellation_still_propagates() -> None:
         repository = FakeRepository()
         parser = SlowParser(5)
         task = asyncio.create_task(processor(repository, parser).process_next())
-        await asyncio.sleep(0.05)
+        await asyncio.wait_for(parser.started.wait(), 2)
         task.cancel()
 
         with pytest.raises(asyncio.CancelledError):

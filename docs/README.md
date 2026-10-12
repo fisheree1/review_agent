@@ -17,7 +17,7 @@
 
 - **产品基线**：[产品需求](./product-requirements.md)、[系统架构](./architecture.md)、[数据库设计](./database-design.md)、[UI 规范](./ui-design-system.md)既包含已实现行为，也包含后续目标；以各节的“当前”说明区分。
 - **本地工作区**：迁移文件已到 `0020_agent_run_events`（运行变化通知）。相关代码和文档仍有未提交改动，不能据此推断线上版本或生产验收已经完成。
-- **线上记录**：[fisher-ai.com 部署记录](./deployment-fisher-ai.md)记录 2026-09-27 的已验证版本，当时迁移至 `0014_agent_workflows`；新的本地功能需单独部署与验收。
+- **线上记录**：[fisher-ai.com 部署记录](./deployment-fisher-ai.md)记录各次发布；2026-10-12 已升级到 `9745bf4`（迁移 `0020_agent_run_events`），登录后的完整流程待在生产上确认。
 - **Agent 工作流**：[ADR-0002](./adr/0002-agent-business-checkpoints.md)是已采纳的持久化决策，[ADR-0003](./adr/0003-deterministic-evidence.md)改为应用确定性选取证据并移除 LangGraph；[工作流开发设计](./agent-workflow-development.md)记录实现与待验证的 Beta 指标。[LangGraph 接入规划](./langgraph-integration-plan.md)仅保留历史背景，当前代码已不使用 LangGraph。
 - **质量证据**：[CA6000 评测](./ca6000-rag-evaluation.md)区分历史单资料结果与尚待完成的多资料真实课件验收；[技术难点](./technical-challenges.md)列出剩余风险及完成判据。
 
